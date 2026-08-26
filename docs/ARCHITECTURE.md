@@ -45,16 +45,24 @@ the applied configuration only after **Apply settings**.
 
 ## Local source preference
 
-`install_dashboard.py` looks for this development layout:
+`install_dashboard.py` supports either of these relative layouts:
 
 ```text
-C:\GGS\pythermogis
-C:\GGS\pythermogis_dashboard
+workspace/pythermogis/dashboard/
 ```
 
-It installs the sibling checkout in editable mode. If absent, Pythermogis 3.0.3
-is installed from TNO's package registry. `pygridsio==1.1.4` and `pygridsio3d`
-are pinned for repeatable grid behaviour.
+or:
+
+```text
+workspace/
+├─ pythermogis/
+└─ pythermogis_dashboard/
+```
+
+It first checks the repository containing the dashboard and then an adjacent
+`pythermogis` checkout. A detected source is installed in editable mode. If none
+is present, Pythermogis 3.0.3 is installed from TNO's package registry.
+`pygridsio==1.1.4` and `pygridsio3d` are pinned for repeatable grid behaviour.
 
 ## Version-control boundary
 

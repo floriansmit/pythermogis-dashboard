@@ -98,8 +98,9 @@ def main() -> None:
         type=Path,
         default=None,
         help=(
-            "Optional local Pythermogis source checkout. If omitted, the installer first "
-            "looks for a sibling 'pythermogis' folder and otherwise installs the public package."
+            "Optional local Pythermogis source checkout. If omitted, the installer checks "
+            "the repository containing this dashboard, then an adjacent 'pythermogis' checkout, "
+            "and otherwise installs the public package."
         ),
     )
     args = parser.parse_args()
@@ -129,8 +130,11 @@ def main() -> None:
     run([python_exe, "-m", "pip", "install", "-r", requirements])
     source_root = args.source_root
     if source_root is None:
-        sibling_source = project_root.parent / "pythermogis"
-        source_root = sibling_source if (sibling_source / "pyproject.toml").exists() else None
+        source_candidates = [project_root, project_root.parent / "pythermogis"]
+        source_root = next(
+            (candidate for candidate in source_candidates if (candidate / "pyproject.toml").exists()),
+            None,
+        )
 
     if source_root is not None:
         source_root = source_root.resolve()

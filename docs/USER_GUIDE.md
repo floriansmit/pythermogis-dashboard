@@ -133,10 +133,10 @@ python run_dashboard.py
 
 ### Requirements file is not found
 
-Run from the cloned `dashboard` directory or use the full path:
+Run the installer from the repository root:
 
 ```powershell
-python C:\GGS\pythermogis_dashboard\dashboard\install_dashboard.py
+python dashboard/install_dashboard.py
 ```
 
 ### Java startup is slow

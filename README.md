@@ -42,9 +42,9 @@ Requirements:
 
 ```powershell
 git clone https://github.com/floriansmit/pythermogis_dashboard.git
-cd pythermogis_dashboard\dashboard
-python install_dashboard.py
-python run_dashboard.py
+cd pythermogis_dashboard
+python dashboard/install_dashboard.py
+python dashboard/run_dashboard.py
 ```
 
 Open <http://localhost:8502>. Port 8502 is used so another Streamlit application
@@ -53,28 +53,38 @@ can remain on the default port 8501.
 Use another port when needed:
 
 ```powershell
-python run_dashboard.py --port 8503
+python dashboard/run_dashboard.py --port 8503
 ```
 
 The installer creates a machine-local environment at
 `%LOCALAPPDATA%\pythermogis-dashboard\.venv`. It does not place thousands of
 environment files in the repository or in OneDrive.
 
-### Use the source checkout from `C:\GGS`
+### Optional local Pythermogis source
 
-When these sibling directories exist, the installer automatically uses the
-local source checkout in editable mode:
+No absolute path is required. The installer first checks whether the dashboard
+is located inside a Pythermogis source checkout. It then checks for an adjacent
+`pythermogis` directory. When either contains `pyproject.toml`, that source is
+installed in editable mode.
 
 ```text
-C:\GGS
-├─ pythermogis\
-└─ pythermogis_dashboard\
+workspace/
+├─ pythermogis/
+│  └─ dashboard/
 ```
 
-You can also specify it explicitly:
+or:
+
+```text
+workspace/
+├─ pythermogis/
+└─ pythermogis_dashboard/
+```
+
+An arbitrary source location can be supplied using a relative or absolute path:
 
 ```powershell
-python install_dashboard.py --source-root C:\GGS\pythermogis
+python dashboard/install_dashboard.py --source-root ../pythermogis
 ```
 
 If no local source checkout is found, the installer installs Pythermogis 3.0.3
