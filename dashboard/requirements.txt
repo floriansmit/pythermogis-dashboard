@@ -1,0 +1,19 @@
+# Installed by install_dashboard.py into a machine-local virtual environment.
+streamlit>=1.45,<2
+matplotlib>=3.9,<4
+geopandas>=1.0,<2
+geopy>=2.4,<3
+netcdf4>=1.7,<2
+plotly>=6,<7
+pyproj>=3.7,<4
+rioxarray>=0.17,<0.18
+xarray==2024.9.0
+pandas>=2.2.3,<3
+JPype1>=1.5.2,<2
+install-jdk==1.1.0
+pydantic>=2.12,<3
+dask>=2025.5.1,<2026
+pytz>=2024.1,<2025
+pyyaml>=6,<7
+pygridsio==1.1.4
+pygridsio3d>=0.1.0
