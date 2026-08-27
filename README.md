@@ -1,14 +1,23 @@
 # Pythermogis Dashboard
 
-![GO-Forward project logo](GO-Forward.png)
+![GO-Forward project logo](dashboard/GO-Forward.png)
 
 A project-based Streamlit dashboard for preparing geological inputs, configuring
 Pythermogis doublet calculations, running deterministic or probabilistic
 simulations, and inspecting spatial and location-specific results.
 
+> **Important**
+>
+> This repository contains the dashboard integration code. Pythermogis and its
+> ThermoGIS Java backend remain separate dependencies and retain their own
+> licensing and disclaimer terms. Review the
+> [Pythermogis documentation](https://pythermogis-15909e.ci.tno.nl/) and the
+> [ThermoGIS disclaimer](https://www.thermogis.nl/en/disclaimer) before use.
+
 ## Folder structure
 
-The Git repository is the dashboard folder itself:
+The repository keeps the Streamlit application in a dedicated `dashboard`
+folder, with its starters and project data at the root:
 
 ```text
 pythermogis-dashboard/
@@ -118,9 +127,8 @@ The dashboard uses installed packages, not neighboring source folders:
 | `pygridsio` | Reading/writing grids and resampling |
 | `pygridsio3d` | Reading and converting GRDECL models |
 
-The older `Multi-realizations` and `PythermogisVOI` source folders are not
-imported. Their relevant GRDECL-to-2D workflow is implemented directly in
-`dashboard/src/workflow.py` using `pygridsio3d`.
+GRDECL inspection and conversion are implemented through `pygridsio3d` in
+`dashboard/src/workflow.py`.
 
 See [Dependency architecture](docs/DEPENDENCIES.md) for the exact boundary.
 

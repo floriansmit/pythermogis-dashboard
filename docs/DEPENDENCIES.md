@@ -26,25 +26,16 @@ checkout in the repository.
 ### pygridsio
 
 The dashboard imports grid reading, writing, and resampling functions from the
-installed `pygridsio==1.1.4` package. The development folder formerly named
-`pygridsio-1.1.4` is not required.
+installed `pygridsio==1.1.4` package.
 
 ### pygridsio3d
 
 The installed `pygridsio3d` package supplies the GRDECL reader and `Grid3dFunc`
 operations used for inspection and conversion.
 
-## Source folders no longer used directly
-
-| Former neighboring folder | Directly imported? | Current replacement |
-|---|---:|---|
-| `pythermogis` | No | Installed `pythermogis==3.0.3` package |
-| `pygridsio-1.1.4` | No | Installed `pygridsio==1.1.4` package |
-| `Multi-realizations` | No | Workflow in `dashboard/src/workflow.py` plus `pygridsio3d` |
-| `PythermogisVOI` | No | Not part of the current unified dashboard |
-
-This lets a user clone one repository, run `uv sync`, and start the dashboard
-without arranging the original research source tree.
+All runtime dependencies are installed from package registries into `.venv`.
+This lets a user clone one repository, run the installer, and start the
+dashboard without arranging additional source trees.
 
 ## Why `.venv` is not source code
 
