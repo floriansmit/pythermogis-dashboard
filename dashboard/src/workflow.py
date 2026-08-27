@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 import os
 import shutil
-import sys
 import tempfile
 from typing import Callable, Sequence
 
@@ -15,9 +14,7 @@ import xarray as xr
 
 
 ROOT = Path(__file__).resolve().parents[2]
-VOI_SOURCE = ROOT / "PythermogisVOI" / "pythermogisvoi" / "src"
 DATA_ROOT = ROOT / "data"
-UNUSED_ROOT = ROOT / "_not_used_by_dashboard"
 INPUT_SUBFOLDERS = {
     "2d_best_fit": "input_data/2d_grid_best_fit",
     "2d_probabilistic": "input_data/2d_grid_probabilistic",
@@ -30,14 +27,6 @@ OUTPUT_SUBFOLDERS = {
     "grdecl_best_fit": "output_data/3d_grdecl_best_fit",
     "grdecl_multi": "output_data/3d_grdecl_multi_realization",
 }
-
-
-def configure_local_imports() -> None:
-    """Prefer the checked-out public and GO-Forward sources to PyPI packages."""
-    for path in (ROOT, VOI_SOURCE):
-        path_string = str(path)
-        if path_string not in sys.path:
-            sys.path.insert(0, path_string)
 
 
 def default_settings() -> dict[str, object]:
@@ -86,13 +75,10 @@ def default_settings() -> dict[str, object]:
 
 
 def available_netcdf_files() -> list[Path]:
-    """Return a concise list of bundled example result/input datasets."""
-    candidates = [
-        ROOT / "examples" / "test_input" / "example_data" / "example.nc",
-        ROOT / "Multi-realizations" / "examples" / "data" / "dummy-model" / "output_data" / "input_pythermogis_100realizations.nc",
-        ROOT / "PythermogisVOI" / "pythermogisvoi" / "examples" / "dummy-model" / "input" / "output_pythermogis_100realizations.nc",
-    ]
-    return [candidate for candidate in candidates if candidate.exists()]
+    """Return NetCDF datasets stored in dashboard projects."""
+    if not DATA_ROOT.exists():
+        return []
+    return sorted(DATA_ROOT.rglob("*.nc"), key=lambda path: str(path).lower())
 
 
 def safe_project_name(name: str) -> str:
@@ -413,8 +399,7 @@ def convert_grdecl_to_dataset(
         from pygridsio3d import Grid3dFunc, read_grid3d
     except Exception as exc:
         raise RuntimeError(
-            "GRDECL conversion requires pygridsio3d. Run `python install_dashboard.py` "
-            "after installing the Multi-realizations dependencies."
+            "GRDECL conversion requires pygridsio3d. Run `uv sync` from the dashboard folder."
         ) from exc
 
     realizations: list[xr.Dataset] = []
@@ -630,7 +615,6 @@ def simulate_dataset(
     """Run a deterministic pythermogis simulation from a mapped xarray dataset."""
     report = status or (lambda _: None)
     report("Starting the Pythermogis Java runtime…")
-    configure_local_imports()
     from pythermogis.aquifer import Aquifer, StochasticAquifer
     from pythermogis.doublet import ThermoGISDoublet
     from pythermogis.settings import UTCSettings

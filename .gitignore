@@ -8,11 +8,11 @@ __pycache__/
 .vscode/
 .DS_Store
 
-# Project inputs and generated simulation results are intentionally local.
+# Project inputs and generated simulation outputs stay local.
 data/**
 !data/.gitkeep
 
-# Common generated geoscience/model artifacts.
+# Common geoscience/model artifacts.
 *.nc
 *.zmap
 *.grdecl
@@ -26,6 +26,6 @@ data/**
 *.cpg
 *.zip
 
-# Environment and local secrets.
+# Local secrets.
 .env
 .streamlit/secrets.toml

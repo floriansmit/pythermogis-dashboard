@@ -1,146 +1,157 @@
 # Pythermogis Dashboard
 
-![GO-Forward project logo](dashboard/GO-Forward.png)
+![GO-Forward project logo](GO-Forward.png)
 
-A project-based Streamlit interface for preparing geological input, configuring
+A project-based Streamlit dashboard for preparing geological inputs, configuring
 Pythermogis doublet calculations, running deterministic or probabilistic
-simulations, and exploring spatial and location-specific results.
+simulations, and inspecting spatial and location-specific results.
 
-The dashboard was developed in the GO-Forward workflow. It makes the calculation
-chain visible: geology selection and validation, well design, cost assumptions,
-economic assumptions, simulation progress, and result interpretation are kept in
-separate tabs rather than hidden behind one run button.
+## Folder structure
 
-> [!IMPORTANT]
-> This repository contains the dashboard integration code. Pythermogis and its
-> ThermoGIS Java backend remain separate dependencies and retain their own
-> licensing and disclaimer terms. Review the
-> [Pythermogis documentation](https://pythermogis-15909e.ci.tno.nl/) and the
-> [ThermoGIS disclaimer](https://www.thermogis.nl/en/disclaimer) before use.
-
-## What is included
-
-- Project creator and selector with isolated input and output directories.
-- Deterministic and probabilistic 2D-grid input.
-- Single-GRDECL conversion to deterministic 2D maps.
-- Multiple-GRDECL conversion to probabilistic 2D statistics.
-- Editable facies definitions and GRDECL inspection before conversion.
-- 2D map and histogram viewers with boundary overlays and grid statistics.
-- Optional grid resampling and explicit validation of the simulation grid.
-- Explained well, cost, and economic settings with staged **Apply settings**
-  forms and per-field default restoration.
-- Simulation progress reporting, named NetCDF output, result loading, spatial
-  maps, and point-level NPV/probability-of-success analysis.
-
-## Quick start on Windows
-
-Requirements:
-
-- Python 3.13
-- Internet access during first installation
-- Approximately 500 MB free for Pythermogis and its Java 17 runtime
-
-```powershell
-git clone https://github.com/floriansmit/pythermogis_dashboard.git
-cd pythermogis_dashboard
-python dashboard/install_dashboard.py
-python dashboard/run_dashboard.py
-```
-
-Open <http://localhost:8502>. Port 8502 is used so another Streamlit application
-can remain on the default port 8501.
-
-Use another port when needed:
-
-```powershell
-python dashboard/run_dashboard.py --port 8503
-```
-
-The installer creates a machine-local environment at
-`%LOCALAPPDATA%\pythermogis-dashboard\.venv`. It does not place thousands of
-environment files in the repository or in OneDrive.
-
-### Optional local Pythermogis source
-
-No absolute path is required. The installer first checks whether the dashboard
-is located inside a Pythermogis source checkout. It then checks for an adjacent
-`pythermogis` directory. When either contains `pyproject.toml`, that source is
-installed in editable mode.
+The Git repository is the dashboard folder itself:
 
 ```text
-workspace/
-├─ pythermogis/
-│  └─ dashboard/
-```
-
-or:
-
-```text
-workspace/
-├─ pythermogis/
-└─ pythermogis_dashboard/
-```
-
-An arbitrary source location can be supplied using a relative or absolute path:
-
-```powershell
-python dashboard/install_dashboard.py --source-root ../pythermogis
-```
-
-If no local source checkout is found, the installer installs Pythermogis 3.0.3
-from TNO's package registry. This makes the GitHub checkout usable without
-copying the separate Pythermogis source into this repository.
-
-## Typical workflow
-
-1. Create or open a project in the sidebar.
-2. In **Geology input**, select one of the four input modes.
-3. Import only the required files into the typed project input folder.
-4. Inspect statistics, maps, histograms, facies, and the optional boundary.
-5. Optionally preview a coarser resolution, then validate the original or
-   resampled dataset.
-6. Review and apply settings in **Well design**, **Cost model**, and
-   **Economic model**.
-7. Choose a unique result name in **Geothermal simulation**, then run.
-8. Open the saved NetCDF file in **Geothermal results** and inspect maps or a
-   selected location.
-
-See [User guide](docs/USER_GUIDE.md) for input requirements, uncertainty rules,
-and tab-by-tab guidance. See [Architecture](docs/ARCHITECTURE.md) for the code and
-data layout.
-
-## Repository layout
-
-```text
-pythermogis_dashboard/
+pythermogis-dashboard/
+├─ install_dashboard.py
+├─ run_dashboard.py
+├─ pyproject.toml
+├─ uv.lock
 ├─ dashboard/
 │  ├─ app.py
-│  ├─ src/workflow.py
-│  ├─ install_dashboard.py
-│  ├─ run_dashboard.py
-│  ├─ requirements.txt
-│  └─ .streamlit/config.toml
-├─ data/                  # local project data; ignored by Git
+│  ├─ GO-Forward.png
+│  └─ src/workflow.py
+├─ data/                  # local project inputs and outputs; ignored by Git
 ├─ docs/
-└─ README.md
+└─ .venv/                 # created by UV; ignored by Git
 ```
 
-Large input grids, GRDECL files, shapefiles, NetCDF results, virtual environments,
-and credentials are intentionally excluded from version control.
+There is no separate Pythermogis source folder required beside the dashboard.
+UV installs the released `pythermogis`, `pygridsio`, and `pygridsio3d` packages
+inside `.venv`. The `.venv` folder is machine-generated and never committed.
+
+## Install and run
+
+### 1. Install UV once
+
+On Windows:
+
+```powershell
+winget install --id astral-sh.uv -e
+```
+
+Close and reopen the terminal if the `uv` command is not immediately available.
+
+### 2. Clone and install the dashboard
+
+These commands work from any parent directory:
+
+```powershell
+git clone https://github.com/floriansmit/pythermogis-dashboard.git
+cd pythermogis-dashboard
+python install_dashboard.py
+```
+
+The root-level installer runs `uv sync --locked --system-certs`, which:
+
+- installs the correct Python version when needed;
+- creates `.venv` in the dashboard folder;
+- installs the exact versions recorded in `uv.lock`;
+- installs Pythermogis 3.0.3 from TNO's package registry;
+- installs the grid and GRDECL libraries from their package registries.
+
+Do not activate the environment manually. The equivalent direct UV command is:
+
+```powershell
+uv sync --locked --system-certs
+```
+
+### 3. Start the dashboard
+
+```powershell
+python run_dashboard.py
+```
+
+Open <http://localhost:8502>. To use another port:
+
+```powershell
+python run_dashboard.py --port 8503
+```
+
+## Dashboard workflow
+
+1. Create or open a project in the sidebar.
+2. Select deterministic/probabilistic 2D grids, one GRDECL, or multiple GRDECLs.
+3. Import and inspect the required files in **Geology input**.
+4. Optionally resample, preview, and validate the simulation grid.
+5. Apply settings in **Well design**, **Cost model**, and **Economic model**.
+6. Name and run the calculation in **Geothermal simulation**.
+7. Open the saved NetCDF file in **Geothermal results**.
+
+## Data layout
+
+Each project is isolated under the local `data` directory:
+
+```text
+data/<project>/
+├─ input_data/
+│  ├─ 2d_grid_best_fit/
+│  ├─ 2d_grid_probabilistic/
+│  ├─ 3d_grdecl_best_fit/
+│  └─ 3d_grdecl_multi_realization/
+└─ output_data/
+   ├─ 2d_grid_best_fit/
+   ├─ 2d_grid_probabilistic/
+   ├─ 3d_grdecl_best_fit/
+   └─ 3d_grdecl_multi_realization/
+```
+
+The contents of `data` are ignored by Git because geological models and results
+can be large or confidential. Back up project data separately when required.
+
+## Geology dependencies
+
+The dashboard uses installed packages, not neighboring source folders:
+
+| Package | Dashboard use |
+|---|---|
+| `pythermogis` | Aquifer objects, model settings, Java-backed doublet simulation |
+| `pygridsio` | Reading/writing grids and resampling |
+| `pygridsio3d` | Reading and converting GRDECL models |
+
+The older `Multi-realizations` and `PythermogisVOI` source folders are not
+imported. Their relevant GRDECL-to-2D workflow is implemented directly in
+`dashboard/src/workflow.py` using `pygridsio3d`.
+
+See [Dependency architecture](docs/DEPENDENCIES.md) for the exact boundary.
+
+## Updating dependencies
+
+Normal users should retain the lockfile and run:
+
+```powershell
+uv sync --locked
+```
+
+Maintainers can intentionally refresh allowed versions with:
+
+```powershell
+uv lock --upgrade
+uv sync
+```
+
+Review and commit both `pyproject.toml` and `uv.lock` when dependencies change.
 
 ## Verification
 
-For a lightweight source check:
-
 ```powershell
-python -m py_compile dashboard\app.py dashboard\src\workflow.py `
-  dashboard\install_dashboard.py dashboard\run_dashboard.py
+uv run python -m py_compile dashboard/app.py dashboard/src/workflow.py install_dashboard.py run_dashboard.py
+uv run python -c "import pythermogis, pygridsio, pygridsio3d; print('Dependencies available')"
 ```
 
-The first real calculation can take longer because Pythermogis may install and
-start Java 17. The simulation tab reports Java startup and cell/chunk progress.
+The first actual calculation may install/start Java 17 and take longer than
+subsequent runs. The simulation tab reports Java startup and cell/chunk progress.
 
-## Status and scope
+## Scope
 
 This is a research decision-support interface for indicative geothermal
 assessment. It is not a substitute for site-specific reservoir engineering,

@@ -1,73 +1,54 @@
 # Architecture
 
-## Runtime components
+## Repository layout
 
 ```text
-Streamlit UI (dashboard/app.py)
-        │
-        ├─ project, file, grid, GRDECL and simulation orchestration
-        │  (dashboard/src/workflow.py)
-        │
-        ├─ pygridsio / pygridsio3d
-        │  grid reading, writing, resampling and GRDECL conversion
-        │
-        └─ Pythermogis Python API
-                  │
-                  └─ ThermoGIS Java backend through JPype / Java 17
+pythermogis-dashboard/
+├─ install_dashboard.py      # runs the locked UV installation
+├─ run_dashboard.py          # starts Streamlit through UV
+├─ pyproject.toml            # direct dependency constraints
+├─ uv.lock                   # exact cross-platform resolution
+├─ dashboard/
+│  ├─ app.py                 # Streamlit state and presentation
+│  └─ src/workflow.py        # data preparation and simulation helpers
+├─ data/                     # local project data; ignored by Git
+└─ docs/
 ```
 
-`app.py` owns Streamlit state and presentation. `workflow.py` contains filesystem,
-geology conversion, xarray preparation, resampling, and model-execution helpers.
-
-## Data flow
+## Runtime flow
 
 ```text
 external files
     → typed project input folder
-    → detected/converted xarray Dataset
+    → detected or GRDECL-derived xarray Dataset
     → optional resampling preview
-    → validated Dataset in session state
+    → validated Dataset
     → Aquifer or StochasticAquifer
-    → ThermoGISDoublet simulation
-    → named NetCDF in typed project output folder
-    → result maps and location analysis
+    → ThermoGISDoublet Java-backed simulation
+    → named NetCDF result
+    → maps and location-level analysis
 ```
 
-GRDECL-derived 2D maps remain below their GRDECL output type and are not
-auto-selected as traditional 2D inputs.
+## Environment boundary
 
-## State model
+UV creates `.venv` at the repository root. Pythermogis, pygridsio,
+pygridsio3d, Python entry points, native libraries, and the ThermoGIS JAR all
+live there. The environment is generated from `pyproject.toml` and `uv.lock` and
+is ignored by Git.
 
-The application distinguishes the raw selected dataset, optional resampled
-preview, validated simulation dataset, staged/applied settings, latest results,
-active project, and geology type. Settings forms stage multiple edits and replace
-the applied configuration only after **Apply settings**.
+The application does not alter `sys.path` to load neighboring source checkouts.
+This keeps execution reproducible and prevents an unrelated local source folder
+from silently overriding the locked package versions.
 
-## Local source preference
+## State boundaries
 
-`install_dashboard.py` supports either of these relative layouts:
+The UI keeps these concepts separate:
 
-```text
-workspace/pythermogis/dashboard/
-```
+- selected raw geology;
+- optional resampling preview;
+- validated simulation grid;
+- staged and applied model settings;
+- latest result dataset;
+- active project and geology mode.
 
-or:
-
-```text
-workspace/
-├─ pythermogis/
-└─ pythermogis_dashboard/
-```
-
-It first checks the repository containing the dashboard and then an adjacent
-`pythermogis` checkout. A detected source is installed in editable mode. If none
-is present, Pythermogis 3.0.3 is installed from TNO's package registry.
-`pygridsio==1.1.4` and `pygridsio3d` are pinned for repeatable grid behaviour.
-
-## Version-control boundary
-
-Git tracks application code, configuration, documentation, and the logo. It
-excludes project data/results, geoscience artifacts, virtual environments,
-credentials, non-public GO-Forward packages, the separate Pythermogis checkout,
-and the ThermoGIS JAR. This keeps the repository small and reduces the risk of
-publishing licensed, confidential, or machine-specific material.
+Only the validated grid and applied settings are passed to a simulation.
