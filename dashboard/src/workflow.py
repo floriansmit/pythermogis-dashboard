@@ -74,6 +74,16 @@ def default_settings() -> dict[str, object]:
     }
 
 
+def lognormal_parameters_from_mean_sd(mean: float, standard_deviation: float) -> tuple[float, float]:
+    """Convert an arithmetic mean and SD to normal parameters in log space."""
+    if mean <= 0:
+        raise ValueError("The permeability mean must be greater than zero.")
+    if standard_deviation < 0:
+        raise ValueError("The permeability standard deviation cannot be negative.")
+    log_variance = np.log1p((standard_deviation / mean) ** 2)
+    return float(np.log(mean) - 0.5 * log_variance), float(np.sqrt(log_variance))
+
+
 def available_netcdf_files() -> list[Path]:
     """Return NetCDF datasets stored in dashboard projects."""
     if not DATA_ROOT.exists():
@@ -101,6 +111,15 @@ def project_output_dir(project_name: str) -> Path:
     return project_data_root(project_name) / "output_data"
 
 
+def _validated_project_root(project_name: str) -> Path:
+    """Return a direct child of DATA_ROOT, suitable for destructive operations."""
+    data_root = DATA_ROOT.resolve()
+    project_root = project_data_root(project_name).resolve()
+    if project_root.parent != data_root:
+        raise ValueError("Project data must be a direct child of the dashboard data folder.")
+    return project_root
+
+
 def ensure_project(project_name: str) -> tuple[Path, Path]:
     """Create the GO-Forward style input/output data folders for a project."""
     input_dir = project_input_dir(project_name)
@@ -110,6 +129,46 @@ def ensure_project(project_name: str) -> tuple[Path, Path]:
     for subfolder in [*INPUT_SUBFOLDERS.values(), *OUTPUT_SUBFOLDERS.values()]:
         (project_data_root(project_name) / subfolder).mkdir(parents=True, exist_ok=True)
     return input_dir, output_dir
+
+
+def remove_project_outputs(project_name: str) -> int:
+    """Remove every output file for a project and recreate its empty folder layout."""
+    project_root = _validated_project_root(project_name)
+    output_dir = project_root / "output_data"
+    removed_files = sum(1 for path in output_dir.rglob("*") if path.is_file()) if output_dir.exists() else 0
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    ensure_project(project_name)
+    return removed_files
+
+
+def remove_project_inputs_and_outputs(project_name: str) -> int:
+    """Clear a project's input and output data while retaining the project itself."""
+    project_root = _validated_project_root(project_name)
+    removed_files = 0
+    for folder_name in ("input_data", "output_data"):
+        folder = project_root / folder_name
+        if folder.exists():
+            removed_files += sum(1 for path in folder.rglob("*") if path.is_file())
+            shutil.rmtree(folder)
+    ensure_project(project_name)
+    return removed_files
+
+
+def remove_project_result(project_name: str, output_subfolder: str, result_path: Path) -> None:
+    """Remove one NetCDF result, after verifying that it belongs to the selected project."""
+    project_root = _validated_project_root(project_name)
+    if output_subfolder not in OUTPUT_SUBFOLDERS.values():
+        raise ValueError("Unknown project output folder.")
+    expected_folder = (project_root / output_subfolder).resolve()
+    target = Path(result_path).resolve()
+    if target.parent != expected_folder:
+        raise ValueError("The selected result is outside the active project output folder.")
+    if target.suffix.lower() not in {".nc", ".netcdf"}:
+        raise ValueError("Only NetCDF result files can be removed here.")
+    if not target.is_file():
+        raise FileNotFoundError(f"Result file does not exist: {target.name}")
+    target.unlink()
 
 
 def list_projects() -> list[str]:
@@ -264,8 +323,14 @@ def grdecl_property_keywords(path: Path) -> list[str]:
 
 def _mapaxes_transform(mapaxes: list[float]):
     origin_x, origin_y = mapaxes[2], mapaxes[3]
-    x_unit = ((mapaxes[4] - mapaxes[2]) / 1000.0, (mapaxes[5] - mapaxes[3]) / 1000.0)
-    y_unit = ((mapaxes[0] - mapaxes[2]) / 1000.0, (mapaxes[1] - mapaxes[3]) / 1000.0)
+    x_vector = (mapaxes[4] - mapaxes[2], mapaxes[5] - mapaxes[3])
+    y_vector = (mapaxes[0] - mapaxes[2], mapaxes[1] - mapaxes[3])
+    x_length = float(np.hypot(*x_vector))
+    y_length = float(np.hypot(*y_vector))
+    if x_length == 0.0 or y_length == 0.0:
+        raise ValueError("MAPAXES contains a zero-length axis.")
+    x_unit = (x_vector[0] / x_length, x_vector[1] / x_length)
+    y_unit = (y_vector[0] / y_length, y_vector[1] / y_length)
 
     def transform(local_x: float, local_y: float) -> tuple[float, float]:
         return (
@@ -274,6 +339,31 @@ def _mapaxes_transform(mapaxes: list[float]):
         )
 
     return transform
+
+
+def grdecl_xy_centres(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Return true global X/Y coordinates for every GRDECL column centre."""
+    data = tokenize_grdecl(path, {"SPECGRID", "MAPAXES", "COORD"})
+    nx, ny = (int(float(value)) for value in data["SPECGRID"][:2])
+    coord = _expand_numeric(data["COORD"])
+    transform = _mapaxes_transform(_expand_numeric(data["MAPAXES"]))
+
+    def pillar_xy(i: int, j: int) -> tuple[float, float]:
+        index = (j * (nx + 1) + i) * 6
+        return coord[index], coord[index + 1]
+
+    map_x = np.empty((ny, nx), dtype=float)
+    map_y = np.empty((ny, nx), dtype=float)
+    for j in range(ny):
+        for i in range(nx):
+            pillars = (
+                pillar_xy(i, j), pillar_xy(i + 1, j),
+                pillar_xy(i, j + 1), pillar_xy(i + 1, j + 1),
+            )
+            local_x = sum(x for x, _ in pillars) / 4.0
+            local_y = sum(y for _, y in pillars) / 4.0
+            map_x[j, i], map_y[j, i] = transform(local_x, local_y)
+    return map_x, map_y
 
 
 def grdecl_cell_centres(path: Path) -> list[tuple[float, float, float]]:
@@ -386,7 +476,7 @@ def convert_grdecl_to_dataset(
     porosity: float = 0.2,
     ntg: float = 1.0,
     permeability: float = 100.0,
-    ln_permeability_sd: float = 0.01,
+    permeability_sd: float = 25.0,
     output_dir: Path | None = None,
 ) -> xr.Dataset:
     """Convert one/more GRDECL realizations to Pythermogis-ready 2D maps."""
@@ -458,6 +548,17 @@ def convert_grdecl_to_dataset(
                 ) from exc
         else:
             permeability_grid = depth * 0.0 + permeability
+        map_x, map_y = grdecl_xy_centres(path)
+        # Grid3dFunc mirrors the GRDECL J axis when it creates each 2D array.
+        # Mirror the global centres identically so every value keeps its cell.
+        geographic_coordinates = {
+            "map_x": (("y", "x"), np.flip(map_x, axis=0)),
+            "map_y": (("y", "x"), np.flip(map_y, axis=0)),
+        }
+        depth = depth.assign_coords(geographic_coordinates)
+        thickness = thickness.assign_coords(geographic_coordinates)
+        porosity_grid = porosity_grid.assign_coords(geographic_coordinates)
+        permeability_grid = permeability_grid.assign_coords(geographic_coordinates)
         if output_dir is not None:
             output_dir.mkdir(parents=True, exist_ok=True)
             outputs = {
@@ -498,6 +599,15 @@ def convert_grdecl_to_dataset(
         ),
     )
     depth_mean = combined["depth"].mean("realization")
+    if permeability_key:
+        ln_permeability_mean = np.log(combined["permeability"]).mean("realization")
+        ln_permeability_sd = np.log(combined["permeability"]).std("realization")
+    else:
+        fallback_ln_mean, fallback_ln_sd = lognormal_parameters_from_mean_sd(
+            permeability, permeability_sd
+        )
+        ln_permeability_mean = depth_mean * 0.0 + fallback_ln_mean
+        ln_permeability_sd = depth_mean * 0.0 + fallback_ln_sd
     dataset = xr.Dataset(
         {
             "depth": depth_mean,
@@ -505,12 +615,8 @@ def convert_grdecl_to_dataset(
             "thickness_sd": combined["thickness"].std("realization"),
             "porosity": combined["porosity"].mean("realization"),
             "ntg": combined["ntg"].mean("realization"),
-            "ln_permeability_mean": np.log(combined["permeability"]).mean("realization"),
-            "ln_permeability_sd": (
-                np.log(combined["permeability"]).std("realization")
-                if permeability_key
-                else depth_mean * 0.0 + ln_permeability_sd
-            ),
+            "ln_permeability_mean": ln_permeability_mean,
+            "ln_permeability_sd": ln_permeability_sd,
         }
     )
     if generated_maps:
@@ -584,6 +690,28 @@ def grid_geometry(dataset: xr.Dataset) -> dict[str, float | int | None]:
     }
 
 
+def suggested_result_filename(project_name: str, dataset: xr.Dataset | None) -> str:
+    """Build a readable result filename from the project and validated grid size."""
+    project_token = "_".join(safe_project_name(project_name).replace(".", "_").split())
+    if dataset is None:
+        return f"pythermogis_results_{project_token}.nc"
+
+    geometry = grid_geometry(dataset)
+    if geometry["dx"] is None or geometry["dy"] is None:
+        return f"pythermogis_results_{project_token}.nc"
+
+    def spacing_token(spacing: float) -> str:
+        if spacing >= 1000.0:
+            return f"{spacing / 1000.0:.6g}km"
+        return f"{spacing:.6g}m"
+
+    grid_size = (
+        f"{spacing_token(float(geometry['dx']))}_x_"
+        f"{spacing_token(float(geometry['dy']))}"
+    )
+    return f"pythermogis_results_{project_token}_{grid_size}.nc"
+
+
 def resample_dataset(
     dataset: xr.Dataset, new_cellsize: float, interpolation: str = "nearest"
 ) -> xr.Dataset:
@@ -600,7 +728,52 @@ def resample_dataset(
             resampled[name] = resample_grid(
                 grid, grid_to_use=reference, interp_method=interpolation
             )
-    return xr.Dataset(resampled)
+    result = xr.Dataset(resampled, attrs=dataset.attrs)
+    if "map_x" in dataset.coords and "map_y" in dataset.coords:
+        original_x, original_y = np.meshgrid(dataset.x.values, dataset.y.values)
+        design = np.column_stack(
+            [np.ones(original_x.size), original_x.ravel(), original_y.ravel()]
+        )
+        map_x_coefficients = np.linalg.lstsq(
+            design, dataset.coords["map_x"].values.ravel(), rcond=None
+        )[0]
+        map_y_coefficients = np.linalg.lstsq(
+            design, dataset.coords["map_y"].values.ravel(), rcond=None
+        )[0]
+        resampled_x, resampled_y = np.meshgrid(result.x.values, result.y.values)
+        resampled_design = np.stack(
+            [np.ones_like(resampled_x), resampled_x, resampled_y], axis=-1
+        )
+        result = result.assign_coords(
+            map_x=(("y", "x"), resampled_design @ map_x_coefficients),
+            map_y=(("y", "x"), resampled_design @ map_y_coefficients),
+        )
+    return result
+
+
+def utc_settings_from_dashboard(settings_values: dict[str, object]):
+    """Create Pythermogis settings from the dashboard's simplified inputs.
+
+    Pythermogis 3.0.3 represents the commercial UTC cutoff as one or more
+    depth- and power-dependent ``CutoffClass`` objects.  The dashboard exposes
+    one cutoff value, so translate it to a class that covers every finite
+    simulated depth and power.
+    """
+    from pythermogis.settings import CutoffClass, UTCSettings
+
+    translated = settings_values.copy()
+    if "utc_cutoff" in translated:
+        utc_cutoff = float(translated.pop("utc_cutoff"))
+        translated["cutoff_classes"] = [
+            CutoffClass(
+                min_depth=float("-inf"),
+                max_depth=float("inf"),
+                min_power=float("-inf"),
+                max_power=float("inf"),
+                cutoff=utc_cutoff,
+            )
+        ]
+    return UTCSettings(**translated)
 
 
 def simulate_dataset(
@@ -617,7 +790,6 @@ def simulate_dataset(
     report("Starting the Pythermogis Java runtime…")
     from pythermogis.aquifer import Aquifer, StochasticAquifer
     from pythermogis.doublet import ThermoGISDoublet
-    from pythermogis.settings import UTCSettings
     import jpype
 
     report(
@@ -671,7 +843,9 @@ def simulate_dataset(
             mask=field("mask"),
         )
     report("Running the ThermoGIS doublet calculation for every grid cell…")
-    results = ThermoGISDoublet(aquifer, UTCSettings(**settings_values)).simulate(
+    results = ThermoGISDoublet(
+        aquifer, utc_settings_from_dashboard(settings_values)
+    ).simulate(
         p_values=p_values
     )
     report("Assembling result grids…")

@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.colors import sample_colorscale
 import streamlit as st
 import xarray as xr
 
@@ -42,17 +43,37 @@ from workflow import (
     load_dataset,
     load_grid_source,
     load_uploaded_grid,
+    lognormal_parameters_from_mean_sd,
     project_files,
     project_data_root,
     project_input_dir,
     project_output_dir,
+    remove_project_inputs_and_outputs,
+    remove_project_outputs,
+    remove_project_result,
     resample_dataset,
     safe_project_name,
     simulate_dataset,
+    suggested_result_filename,
 )
 
 
-st.set_page_config(page_title="GO-Forward geothermal workflows", layout="wide")
+st.set_page_config(page_title="Pythermogis dashboard", layout="wide")
+
+tab_bar_background = "#000000" if st.context.theme.type == "dark" else "#ffffff"
+st.html(
+    f"""
+    <style>
+    [data-testid="stTabs"] [role="tablist"] {{
+        position: sticky;
+        top: 3.75rem;
+        z-index: 1000;
+        background: {tab_bar_background};
+        border-bottom: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+    }}
+    </style>
+    """
+)
 
 
 DEFAULT_SETTINGS = default_settings()
@@ -402,12 +423,219 @@ def plot_boundary_overlay(ax, grid, boundary) -> None:
     ax.set_ylim(y_limits)
 
 
+def has_curvilinear_map_coordinates(grid: xr.DataArray) -> bool:
+    """Return whether a grid carries true 2D projected cell-centre coordinates."""
+    return (
+        "map_x" in grid.coords
+        and "map_y" in grid.coords
+        and grid.coords["map_x"].dims == ("y", "x")
+        and grid.coords["map_y"].dims == ("y", "x")
+    )
+
+
+def plot_curvilinear_grid(ax, grid: xr.DataArray, variable: str):
+    """Draw rotated GRDECL cells in their true map position without resampling."""
+    display_grid = grid.transpose("y", "x")
+    mesh = ax.pcolormesh(
+        display_grid.coords["map_x"].values,
+        display_grid.coords["map_y"].values,
+        display_grid.values,
+        shading="nearest",
+        cmap="viridis_r" if is_depth_property(variable) else "viridis",
+    )
+    ax.set_xlabel("Map X [m]")
+    ax.set_ylabel("Map Y [m]")
+    return mesh
+
+
+def _expand_cell_centres_to_corners(values: np.ndarray) -> np.ndarray:
+    """Infer quadrilateral corners from a 2D array of cell-centre coordinates."""
+    corners = np.asarray(values, dtype=float)
+    for axis in (1, 0):
+        if corners.shape[axis] == 1:
+            corners = np.concatenate([corners, corners], axis=axis)
+            continue
+        half_steps = np.diff(corners, axis=axis) / 2.0
+        first = np.take(corners, [0], axis=axis) - np.take(half_steps, [0], axis=axis)
+        middle = np.take(corners, range(corners.shape[axis] - 1), axis=axis) + half_steps
+        last = np.take(corners, [-1], axis=axis) + np.take(half_steps, [-1], axis=axis)
+        corners = np.concatenate([first, middle, last], axis=axis)
+    return corners
+
+
+def interactive_curvilinear_figure(
+    grid: xr.DataArray, variable: str, boundary
+) -> go.Figure:
+    """Build a fast 2D Plotly polygon raster for a rotated grid."""
+    display_grid = grid.transpose("y", "x")
+    values = np.asarray(display_grid.values, dtype=float)
+    centre_x = np.asarray(display_grid.coords["map_x"].values, dtype=float)
+    centre_y = np.asarray(display_grid.coords["map_y"].values, dtype=float)
+    corner_x = _expand_cell_centres_to_corners(centre_x)
+    corner_y = _expand_cell_centres_to_corners(centre_y)
+    map_x_min, map_x_max = float(np.nanmin(corner_x)), float(np.nanmax(corner_x))
+    map_y_min, map_y_max = float(np.nanmin(corner_y)), float(np.nanmax(corner_y))
+    x_padding = max((map_x_max - map_x_min) * 0.02, 1.0)
+    y_padding = max((map_y_max - map_y_min) * 0.02, 1.0)
+
+    metadata = RESULT_METADATA.get(variable, {})
+    unit = metadata.get("unit") or grid.attrs.get("units", "")
+    colorbar_title = f"{variable} [{unit}]" if unit else variable
+    figure = go.Figure()
+    valid_cells = np.argwhere(np.isfinite(values))
+    if valid_cells.size:
+        valid_values = values[tuple(valid_cells.T)]
+        value_min = float(valid_values.min())
+        value_max = float(valid_values.max())
+        if value_max > value_min:
+            fractions = (valid_values - value_min) / (value_max - value_min)
+        else:
+            fractions = np.full(valid_values.shape, 0.5)
+        if is_depth_property(variable):
+            fractions = 1.0 - fractions
+
+        # Group cells into a modest number of colour traces. This keeps the
+        # original quadrilateral footprints without creating one Plotly trace
+        # per cell, which is prohibitively slow for larger grids.
+        colour_bin_count = min(48, max(1, len(valid_cells)))
+        colour_bins = np.minimum(
+            (fractions * colour_bin_count).astype(int), colour_bin_count - 1
+        )
+        for colour_bin in np.unique(colour_bins):
+            polygon_x: list[float | None] = []
+            polygon_y: list[float | None] = []
+            for row, column in valid_cells[colour_bins == colour_bin]:
+                cell_x = [
+                    corner_x[row, column], corner_x[row, column + 1],
+                    corner_x[row + 1, column + 1], corner_x[row + 1, column],
+                ]
+                cell_y = [
+                    corner_y[row, column], corner_y[row, column + 1],
+                    corner_y[row + 1, column + 1], corner_y[row + 1, column],
+                ]
+                polygon_x.extend([*cell_x, cell_x[0], None])
+                polygon_y.extend([*cell_y, cell_y[0], None])
+            colour_fraction = (float(colour_bin) + 0.5) / colour_bin_count
+            fill_colour = sample_colorscale("Viridis", [colour_fraction])[0]
+            figure.add_trace(
+                go.Scattergl(
+                    x=polygon_x,
+                    y=polygon_y,
+                    mode="lines",
+                    fill="toself",
+                    fillcolor=fill_colour,
+                    line={"color": "rgba(35, 35, 35, 0.28)", "width": 0.45},
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
+
+        # An effectively invisible WebGL hover layer supplies exact values and
+        # the continuous colour bar; the map itself remains filled polygons.
+        figure.add_trace(
+            go.Scattergl(
+                x=centre_x[tuple(valid_cells.T)],
+                y=centre_y[tuple(valid_cells.T)],
+                mode="markers",
+                customdata=valid_values,
+                marker={
+                    "size": 1,
+                    "opacity": 0.001,
+                    "color": valid_values,
+                    "colorscale": "Viridis",
+                    "reversescale": is_depth_property(variable),
+                    "cmin": value_min,
+                    "cmax": value_max,
+                    "showscale": True,
+                    "colorbar": {"title": colorbar_title},
+                },
+                hovertemplate=(
+                    "Map X: %{x:,.2f} m<br>"
+                    "Map Y: %{y:,.2f} m<br>"
+                    f"{variable}: %{{customdata:.6g}}"
+                    + (f" {unit}" if unit else "")
+                    + "<extra></extra>"
+                ),
+                showlegend=False,
+            )
+        )
+
+    if boundary is not None:
+        try:
+            prepared = boundary_for_grid(boundary, grid)
+            clip_bounds = (
+                map_x_min - x_padding, map_y_min - y_padding,
+                map_x_max + x_padding, map_y_max + y_padding,
+            )
+            prepared = prepared.clip(clip_bounds)
+            simplify_tolerance = max(map_x_max - map_x_min, map_y_max - map_y_min) / 2_000
+            if simplify_tolerance > 0 and not prepared.empty:
+                prepared = prepared.copy()
+                prepared.geometry = prepared.geometry.simplify(
+                    simplify_tolerance, preserve_topology=True
+                )
+
+            def add_boundary_geometry(geometry) -> None:
+                if geometry is None or geometry.is_empty:
+                    return
+                geometry_type = geometry.geom_type
+                if geometry_type in {"LineString", "LinearRing"}:
+                    coordinates = np.asarray(geometry.coords)
+                    figure.add_trace(
+                        go.Scattergl(
+                            x=coordinates[:, 0], y=coordinates[:, 1], mode="lines",
+                            line={"color": "#ff3b30", "width": 3},
+                            hoverinfo="skip", showlegend=False,
+                        )
+                    )
+                elif geometry_type == "Polygon":
+                    add_boundary_geometry(geometry.exterior)
+                    for interior in geometry.interiors:
+                        add_boundary_geometry(interior)
+                elif hasattr(geometry, "geoms"):
+                    for part in geometry.geoms:
+                        add_boundary_geometry(part)
+
+            for geometry in prepared.geometry:
+                add_boundary_geometry(geometry)
+        except Exception as exc:
+            st.warning(f"Boundary could not be overlaid: {exc}")
+
+    figure.update_layout(
+        title=variable,
+        height=520,
+        margin={"l": 20, "r": 20, "t": 45, "b": 20},
+        dragmode="pan",
+        hovermode="closest",
+        hoverdistance=-1,
+        uirevision=(
+            f"{variable}-{values.shape}-"
+            f"{map_x_min:.3f}-{map_x_max:.3f}-{map_y_min:.3f}-{map_y_max:.3f}"
+        ),
+        xaxis={
+            "title": "Map X [m]",
+            "constrain": "domain",
+            "constraintoward": "center",
+            "range": [map_x_min, map_x_max],
+        },
+        yaxis={
+            "title": "Map Y [m]",
+            "scaleanchor": "x",
+            "scaleratio": 1,
+            "constrain": "domain",
+            "constraintoward": "middle",
+            "range": [map_y_min, map_y_max],
+        },
+    )
+    return figure
+
+
 def show_result_map(dataset: xr.Dataset, boundary) -> None:
     variable = st.selectbox(
         "Result variable to inspect", list(dataset.data_vars), key="result_grid_variable",
         format_func=lambda name: RESULT_METADATA.get(name, {}).get("label", name.replace("_", " ").title()),
     )
-    result_column, dataset_column = st.columns(2, gap="large")
+    result_column, dataset_column = st.columns([7, 3], gap="large")
     with result_column:
         show_grid_viewer(
             dataset,
@@ -416,6 +644,7 @@ def show_result_map(dataset: xr.Dataset, boundary) -> None:
             title="Result map and statistics",
             variable=variable,
             compact=True,
+            interactive=True,
         )
     with dataset_column:
         metadata = RESULT_METADATA.get(variable)
@@ -450,6 +679,7 @@ def show_grid_viewer(
     variable: str | None = None,
     compact: bool = False,
     show_histogram: bool = True,
+    interactive: bool = False,
 ) -> None:
     """Inspect any loaded geology grid without having to run a simulation."""
     if compact:
@@ -477,16 +707,129 @@ def show_grid_viewer(
             grid = grid.isel({dim: index})
 
     def render_map() -> None:
-        fig, ax = plt.subplots(figsize=(5.8, 3.7) if compact else (7, 4.5))
-        if grid.ndim == 2:
+        interactive_height = 700 if compact else 520
+        curvilinear = grid.ndim == 2 and has_curvilinear_map_coordinates(grid)
+        if interactive and curvilinear:
+            figure = interactive_curvilinear_figure(grid, variable, boundary)
+            figure.update_layout(height=interactive_height)
+            st.caption(
+                "Hover over a quadrilateral cell to read its value. Scroll to zoom; drag to pan. "
+                "The map scale is locked equally in X and Y, and the original rotated cells are "
+                "displayed without north–south resampling."
+            )
+            st.plotly_chart(
+                figure,
+                key=f"{key_prefix}_{variable}_interactive_curvilinear_map",
+                width="stretch",
+                config={"scrollZoom": True, "displaylogo": False, "displayModeBar": True},
+            )
+            return
+        if interactive and grid.ndim == 2 and not curvilinear:
             x_dim = "x" if "x" in grid.dims else grid.dims[-1]
             y_dim = "y" if "y" in grid.dims else grid.dims[0]
-            grid.plot(
-                ax=ax,
-                x=x_dim,
-                y=y_dim,
-                cmap="viridis_r" if is_depth_property(variable) else "viridis",
+            display_grid = grid.transpose(y_dim, x_dim)
+            metadata = RESULT_METADATA.get(variable, {})
+            unit = metadata.get("unit") or grid.attrs.get("units", "")
+            colorbar_title = f"{variable} [{unit}]" if unit else variable
+            figure = go.Figure(
+                go.Heatmap(
+                    x=grid[x_dim].values,
+                    y=grid[y_dim].values,
+                    z=display_grid.values,
+                    colorscale="Viridis",
+                    reversescale=is_depth_property(variable),
+                    zsmooth=False,
+                    xgap=0.35,
+                    ygap=0.35,
+                    hoverongaps=False,
+                    colorbar={"title": colorbar_title},
+                    hovertemplate=(
+                        f"{x_dim}: %{{x:,.2f}}<br>"
+                        f"{y_dim}: %{{y:,.2f}}<br>"
+                        f"{variable}: %{{z:.6g}}"
+                        + (f" {unit}" if unit else "")
+                        + "<extra></extra>"
+                    ),
+                )
             )
+            if boundary is not None:
+                try:
+                    prepared = boundary_for_grid(boundary, grid)
+
+                    def add_boundary_geometry(geometry) -> None:
+                        if geometry is None or geometry.is_empty:
+                            return
+                        geometry_type = geometry.geom_type
+                        if geometry_type in {"LineString", "LinearRing"}:
+                            coordinates = np.asarray(geometry.coords)
+                            figure.add_trace(
+                                go.Scatter(
+                                    x=coordinates[:, 0], y=coordinates[:, 1], mode="lines",
+                                    line={"color": "#ff3b30", "width": 1.5},
+                                    hoverinfo="skip", showlegend=False,
+                                )
+                            )
+                        elif geometry_type == "Polygon":
+                            add_boundary_geometry(geometry.exterior)
+                            for interior in geometry.interiors:
+                                add_boundary_geometry(interior)
+                        elif hasattr(geometry, "geoms"):
+                            for part in geometry.geoms:
+                                add_boundary_geometry(part)
+
+                    for geometry in prepared.geometry:
+                        add_boundary_geometry(geometry)
+                except Exception as exc:
+                    st.warning(f"Boundary could not be overlaid: {exc}")
+            figure.update_layout(
+                title=variable,
+                height=interactive_height,
+                margin={"l": 20, "r": 20, "t": 45, "b": 20},
+                dragmode="zoom",
+                xaxis={
+                    "title": x_dim,
+                    "constrain": "domain",
+                    "constraintoward": "center",
+                },
+                yaxis={
+                    "title": y_dim,
+                    "scaleanchor": "x",
+                    "scaleratio": 1,
+                    "constrain": "domain",
+                    "constraintoward": "middle",
+                },
+            )
+            st.caption(
+                "Hover over a cell to read its value. Scroll to zoom; drag to zoom or pan. "
+                "The map scale is locked equally in X and Y."
+            )
+            st.plotly_chart(
+                figure,
+                key=f"{key_prefix}_{variable}_interactive_map",
+                width="stretch",
+                config={"scrollZoom": True, "displaylogo": False, "displayModeBar": True},
+            )
+            return
+
+        fig, ax = plt.subplots(figsize=(5.8, 3.7) if compact else (7, 4.5))
+        if grid.ndim == 2:
+            if curvilinear:
+                mesh = plot_curvilinear_grid(ax, grid, variable)
+                fig.colorbar(mesh, ax=ax)
+                if interactive:
+                    st.caption(
+                        "This rotated GRDECL grid is shown with its original quadrilateral cells. "
+                        "It is not resampled onto north–south cells."
+                    )
+            else:
+                x_dim = "x" if "x" in grid.dims else grid.dims[-1]
+                y_dim = "y" if "y" in grid.dims else grid.dims[0]
+                grid.plot(
+                    ax=ax,
+                    x=x_dim,
+                    y=y_dim,
+                    cmap="viridis_r" if is_depth_property(variable) else "viridis",
+                )
             if boundary is not None:
                 try:
                     plot_boundary_overlay(ax, grid, boundary)
@@ -1096,6 +1439,103 @@ def preferred_grdecl_property(properties: list[str], tokens: tuple[str, ...], fa
     return fallback
 
 
+def close_open_results() -> None:
+    """Close and forget the result currently held in session state."""
+    open_results = st.session_state.get("results")
+    if open_results is not None and hasattr(open_results, "close"):
+        open_results.close()
+    st.session_state.results = None
+    st.session_state.current_result_path = None
+    st.session_state.loaded_result_upload_signature = None
+
+
+def clear_loaded_project_data() -> None:
+    """Forget loaded inputs and outputs after their backing project files are removed."""
+    close_open_results()
+    for key in ("dataset", "raw_selected_dataset"):
+        loaded_data = st.session_state.get(key)
+        if loaded_data is not None and hasattr(loaded_data, "close"):
+            loaded_data.close()
+    st.session_state.dataset = None
+    st.session_state.raw_selected_dataset = None
+    st.session_state.mapping = {}
+    st.session_state.boundary = None
+    st.session_state.boundary_source_path = None
+    st.session_state.geology_source_state_key = None
+
+
+@st.dialog("Remove project outputs")
+def confirm_remove_project_outputs(project_name: str) -> None:
+    st.warning(
+        f"This permanently removes every saved output from **{project_name}**. "
+        "Project inputs are kept."
+    )
+    confirmation = st.text_input(
+        "Type the project name to confirm",
+        key=f"confirm_remove_outputs_{project_name}",
+    )
+    if st.button(
+        "Remove all outputs",
+        type="primary",
+        disabled=confirmation != project_name,
+        width="stretch",
+    ):
+        try:
+            close_open_results()
+            removed_files = remove_project_outputs(project_name)
+            st.session_state.project_removal_notice = (
+                f"Removed {removed_files} output file(s) from {project_name}."
+            )
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Could not remove project outputs: {exc}")
+
+
+@st.dialog("Remove project inputs and outputs")
+def confirm_remove_all_project_data(project_name: str) -> None:
+    st.warning(
+        f"This permanently removes every input and output file from **{project_name}**. "
+        "The empty project and its folder structure will remain."
+    )
+    confirmation = st.text_input(
+        "Type the project name to confirm",
+        key=f"confirm_remove_all_{project_name}",
+    )
+    if st.button(
+        "Remove inputs and outputs",
+        type="primary",
+        disabled=confirmation != project_name,
+        width="stretch",
+    ):
+        try:
+            clear_loaded_project_data()
+            removed_files = remove_project_inputs_and_outputs(project_name)
+            st.session_state.project_removal_notice = (
+                f"Removed {removed_files} input/output file(s) from {project_name}."
+            )
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Could not remove project data: {exc}")
+
+
+@st.dialog("Remove geothermal result")
+def confirm_remove_result(
+    project_name: str, output_subfolder: str, result_path: Path
+) -> None:
+    st.warning(f"Permanently remove **{result_path.name}** from this project?")
+    st.caption(str(result_path))
+    if st.button("Remove result", type="primary", width="stretch"):
+        try:
+            current_path = st.session_state.get("current_result_path")
+            if current_path and Path(current_path).resolve() == result_path.resolve():
+                close_open_results()
+            remove_project_result(project_name, output_subfolder, result_path)
+            st.session_state.result_removal_notice = f"Removed result: {result_path.name}"
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Could not remove result: {exc}")
+
+
 def project_sidebar() -> str:
     """Create/select a dashboard project."""
     st.subheader("Project")
@@ -1128,6 +1568,23 @@ def project_sidebar() -> str:
     input_count = sum(len(project_files(active, folder)) for folder in INPUT_SUBFOLDERS.values())
     output_count = sum(len(project_files(active, folder)) for folder in OUTPUT_SUBFOLDERS.values())
     st.caption(f"Typed project files: {input_count} input, {output_count} output")
+    notice = st.session_state.pop("project_removal_notice", None)
+    if notice:
+        st.success(notice)
+    with st.expander("Remove project data"):
+        st.caption("Choose what to clear. The project itself remains available.")
+        if st.button(
+            "Remove outputs",
+            key=f"remove_project_outputs_{active}",
+            width="stretch",
+        ):
+            confirm_remove_project_outputs(active)
+        if st.button(
+            "Remove inputs and outputs",
+            key=f"remove_project_all_{active}",
+            width="stretch",
+        ):
+            confirm_remove_all_project_data(active)
     return active
 
 
@@ -1150,8 +1607,20 @@ def show_location_analysis(results: xr.Dataset, boundary) -> None:
         return
     st.subheader("Location analysis")
     pos = results["pos"] if "pos" in results else pos_map(results)
-    method = st.radio("Location source", ["XY coordinates", "Select point on POS map", "Address"], horizontal=True)
-    x, y = float(pos.x.mean()), float(pos.y.mean())
+    curvilinear = has_curvilinear_map_coordinates(pos)
+    location_methods = ["XY coordinates", "Address"] if curvilinear else [
+        "XY coordinates", "Select point on POS map", "Address"
+    ]
+    method = st.radio("Location source", location_methods, horizontal=True)
+    if curvilinear:
+        x = float(pos.coords["map_x"].mean())
+        y = float(pos.coords["map_y"].mean())
+        st.caption(
+            "The GRDECL grid is rotated. Enter projected map coordinates or use an address; "
+            "the nearest original quadrilateral cell is selected."
+        )
+    else:
+        x, y = float(pos.x.mean()), float(pos.y.mean())
     if method == "XY coordinates":
         col_x, col_y = st.columns(2)
         x = col_x.number_input("X coordinate (m)", value=x)
@@ -1191,9 +1660,20 @@ def show_location_analysis(results: xr.Dataset, boundary) -> None:
         x, y = st.session_state.address_location
         st.caption(f"Resolved location: {x:.0f}, {y:.0f} m")
 
-    selected = results.sel(x=x, y=y, method="nearest")
-    selected_x, selected_y = float(selected.x), float(selected.y)
-    probability = float(pos.sel(x=x, y=y, method="nearest"))
+    if curvilinear:
+        squared_distance = (
+            (pos.coords["map_x"] - x) ** 2 + (pos.coords["map_y"] - y) ** 2
+        )
+        flat_index = int(np.nanargmin(squared_distance.values))
+        y_index, x_index = np.unravel_index(flat_index, squared_distance.shape)
+        selected = results.isel(y=y_index, x=x_index)
+        selected_x = float(pos.coords["map_x"].isel(y=y_index, x=x_index))
+        selected_y = float(pos.coords["map_y"].isel(y=y_index, x=x_index))
+        probability = float(pos.isel(y=y_index, x=x_index))
+    else:
+        selected = results.sel(x=x, y=y, method="nearest")
+        selected_x, selected_y = float(selected.x), float(selected.y)
+        probability = float(pos.sel(x=x, y=y, method="nearest"))
     fig, axes = plt.subplots(ncols=2, figsize=(10, 4.5))
     selected["npv"].plot(y="p_value", ax=axes[0])
     axes[0].axvline(0.0, color="tab:orange", ls="--")
@@ -1203,7 +1683,11 @@ def show_location_analysis(results: xr.Dataset, boundary) -> None:
     axes[0].tick_params(labelsize=6)
     axes[0].set_xlabel("NPV [million EUR]", fontsize=7)
     axes[0].set_ylabel("p-value [%]", fontsize=7)
-    pos.plot(ax=axes[1])
+    if curvilinear:
+        mesh = plot_curvilinear_grid(axes[1], pos, "POS")
+        fig.colorbar(mesh, ax=axes[1])
+    else:
+        pos.plot(ax=axes[1])
     axes[1].scatter(selected_x, selected_y, marker="x", color="tab:red")
     if boundary is not None:
         try:
@@ -1218,7 +1702,7 @@ def show_location_analysis(results: xr.Dataset, boundary) -> None:
 
 header, logo = st.columns([5, 1])
 with header:
-    st.title("GO-Forward geothermal workflows")
+    st.title("Pythermogis dashboard")
     st.caption("Project-based Pythermogis workflow for 2D grids and GRDECL-derived maps.")
 with logo:
     if LOGO_PATH.exists():
@@ -1455,9 +1939,25 @@ with tabs[0]:
             )
 
         grdecl_ntg = st.number_input("Constant NTG", value=1.0, min_value=0.0, max_value=1.0)
-        grdecl_ln_perm_sd = 0.01
+        grdecl_perm_sd = 25.0
         if stochastic and not permeability_key:
-            grdecl_ln_perm_sd = c5.number_input("Fallback ln permeability SD", value=0.01, min_value=0.0)
+            grdecl_perm_sd = c5.number_input(
+                "Fallback permeability SD (mD)",
+                value=25.0,
+                min_value=0.0,
+                key=f"permeability_sd_fallback_{source_folder_key}_{property_set_version}",
+                help=(
+                    "Enter uncertainty in millidarcy. It is converted with the permeability "
+                    "mean to the log-space parameters required by the probabilistic simulation."
+                ),
+            )
+            fallback_ln_mean, fallback_ln_sd = lognormal_parameters_from_mean_sd(
+                grdecl_perm, grdecl_perm_sd
+            )
+            c5.caption(
+                f"Converted for simulation: ln-permeability mean {fallback_ln_mean:.4g}, "
+                f"SD {fallback_ln_sd:.4g}."
+            )
         if st.button("Generate 2D Pythermogis maps from GRDECL", type="primary"):
             try:
                 grdecls_to_convert = chosen_grdecls[:1] if geology_source.startswith("Single") else chosen_grdecls
@@ -1473,15 +1973,24 @@ with tabs[0]:
                         porosity=grdecl_porosity,
                         ntg=grdecl_ntg,
                         permeability=grdecl_perm,
-                        ln_permeability_sd=grdecl_ln_perm_sd,
+                        permeability_sd=grdecl_perm_sd,
                         output_dir=project_data_root(active_project) / OUTPUT_SUBFOLDERS[source_folder_key] / "generated_2d_maps",
                     )
                 st.session_state.raw_selected_dataset = selected
                 generated = selected.attrs.get("generated_maps", "")
-                st.success(f"Generated {len(selected.data_vars)} maps from {len(grdecls_to_convert)} GRDECL file(s).")
+                generated_files = [line for line in generated.splitlines() if line.strip()]
+                st.success(
+                    f"Processed {len(grdecls_to_convert)} GRDECL file(s) into "
+                    f"{len(selected.data_vars)} combined Pythermogis map variables."
+                )
                 if generated:
-                    st.caption("Generated ZMAP files:")
-                    st.code(generated)
+                    st.caption(f"Saved intermediate ZMAP files ({len(generated_files)}):")
+                    st.code(
+                        "\n".join(generated_files),
+                        language=None,
+                        wrap_lines=False,
+                        height=160,
+                    )
                 notes = selected.attrs.get("conversion_notes", "")
                 if notes:
                     st.warning("Some GRDECL properties used fallback values:")
@@ -1843,6 +2352,7 @@ with tabs[0]:
             validate_clicked = top_controls[2].button(
                 validation_button_label, type="primary", width="stretch",
             )
+            validation_feedback = st.empty()
 
             original_column, resampled_column = st.columns(2, gap="large")
             with original_column:
@@ -1870,7 +2380,7 @@ with tabs[0]:
                 st.session_state.run_type = "stochastic" if stochastic else "deterministic"
                 final_geometry = grid_geometry(validation_dataset)
                 choice = "resampled" if resampling_enabled else "original, not resampled"
-                st.success(
+                validation_feedback.success(
                     f"Validated {choice} simulation grids: {final_geometry['x_cells']} × "
                     f"{final_geometry['y_cells']} = {final_geometry['cell_count']:,} cells at "
                     f"{final_geometry['dx']:,.0f} × {final_geometry['dy']:,.0f} m."
@@ -1913,9 +2423,20 @@ with tabs[4]:
     active_output_folder = project_data_root(active_project) / active_output_subfolder
     active_output_folder.mkdir(parents=True, exist_ok=True)
 
+    suggested_filename = suggested_result_filename(
+        active_project, st.session_state.dataset
+    )
+    previous_suggestion = st.session_state.get("simulation_result_filename_suggestion")
+    current_filename = st.session_state.get("simulation_result_filename")
+    if current_filename in {None, "pythermogis_results.nc", previous_suggestion}:
+        st.session_state.simulation_result_filename = suggested_filename
+    st.session_state.simulation_result_filename_suggestion = suggested_filename
     raw_result_name = st.text_input(
-        "Result filename", value="pythermogis_results.nc", key="simulation_result_filename",
-        help="The .nc extension is added automatically. Folder components are removed so the result stays inside this project's output folder.",
+        "Result filename", key="simulation_result_filename",
+        help=(
+            "Automatically based on the active project and validated grid size. You can edit it; "
+            "the .nc extension is added automatically and folder components are removed."
+        ),
     ).strip()
     safe_result_name = Path(raw_result_name).name if raw_result_name else ""
     if safe_result_name and not safe_result_name.lower().endswith(".nc"):
@@ -1957,8 +2478,12 @@ with tabs[4]:
                 st.metric("Validated cell size", f"{validated_geometry['dx']:,.0f} × {validated_geometry['dy']:,.0f} m")
             st.metric("Validated grid cells", f"{validated_geometry['cell_count']:,}")
             st.caption(f"Variables: {', '.join(st.session_state.dataset.data_vars)}")
+            run_button_slot = st.empty()
+            run_progress_slot = st.empty()
     else:
         st.info("No validated simulation grid is currently available. Validate one in the Geology input tab.")
+        run_button_slot = st.empty()
+        run_progress_slot = st.empty()
     st.divider()
 
     filename_ready = bool(output_path and (not output_exists or overwrite_result))
@@ -1975,31 +2500,32 @@ with tabs[4]:
         st.caption("Percentiles are passed as 0–100 values, e.g. 10, 50, and 90.")
         detailed_progress = st.checkbox("Show detailed cell progress", value=True, key="stochastic_progress")
         rows_per_chunk = st.slider("Rows per progress update", 1, 50, 5, disabled=not detailed_progress, key="stochastic_chunk_rows")
-        run_clicked = st.button(
+        run_clicked = run_button_slot.button(
             "Run probabilistic Pythermogis simulation and save", type="primary",
-            disabled=not (inputs_ready and filename_ready and bool(p_values)),
+            disabled=not (inputs_ready and filename_ready and bool(p_values)), width="stretch",
         )
         if run_clicked:
-            progress = st.status("Preparing probabilistic simulation", expanded=True)
-            progress_bar = st.progress(0, text="Waiting to start calculation")
-            try:
-                def update_cells(done, total):
-                    progress_bar.progress(done / total, text=f"Calculating {done:,}/{total:,} cells")
-                st.session_state.results = simulate_dataset(
-                    st.session_state.dataset, st.session_state.mapping, settings,
-                    status=progress.write, p_values=p_values,
-                    cell_progress=update_cells if detailed_progress else None,
-                    rows_per_chunk=rows_per_chunk,
-                )
-                progress.write(f"Saving NetCDF result to {output_path}")
-                st.session_state.results.to_netcdf(output_path, mode="w")
-                st.session_state.current_result_path = output_path
-                progress_bar.empty()
-                progress.update(label="Simulation complete and result saved", state="complete", expanded=False)
-                st.success(f"Simulation complete. Result saved automatically to `{output_path}`.")
-            except Exception as exc:
-                progress.update(label="Simulation or result saving failed", state="error", expanded=True)
-                st.exception(exc)
+            with run_progress_slot.container():
+                progress = st.status("Preparing probabilistic simulation", expanded=True)
+                progress_bar = st.progress(0, text="Waiting to start calculation")
+                try:
+                    def update_cells(done, total):
+                        progress_bar.progress(done / total, text=f"Calculating {done:,}/{total:,} cells")
+                    st.session_state.results = simulate_dataset(
+                        st.session_state.dataset, st.session_state.mapping, settings,
+                        status=progress.write, p_values=p_values,
+                        cell_progress=update_cells if detailed_progress else None,
+                        rows_per_chunk=rows_per_chunk,
+                    )
+                    progress.write(f"Saving NetCDF result to {output_path}")
+                    st.session_state.results.to_netcdf(output_path, mode="w")
+                    st.session_state.current_result_path = output_path
+                    progress_bar.empty()
+                    progress.update(label="Simulation complete and result saved", state="complete", expanded=False)
+                    st.success(f"Simulation complete. Result saved automatically to `{output_path}`.")
+                except Exception as exc:
+                    progress.update(label="Simulation or result saving failed", state="error", expanded=True)
+                    st.exception(exc)
     else:
         inputs_ready = (
             st.session_state.dataset is not None
@@ -2008,32 +2534,36 @@ with tabs[4]:
         )
         if not inputs_ready:
             st.warning("Load and validate thickness, porosity, net-to-gross, depth, and either permeability or transmissivity before running.")
-        run_clicked = st.button(
+        run_clicked = run_button_slot.button(
             "Run Pythermogis simulation and save", type="primary",
-            disabled=not (inputs_ready and filename_ready),
+            disabled=not (inputs_ready and filename_ready), width="stretch",
         )
         if run_clicked:
-            cell_bar = st.progress(0, text="Waiting to start calculation")
-            def update_cells(done, total):
-                cell_bar.progress(done / total, text=f"Calculating {done:,}/{total:,} cells")
-            progress = st.status("Preparing simulation…", expanded=True)
-            try:
-                with st.spinner("Starting the Java backend and running the doublet calculation…"):
-                    st.session_state.results = simulate_dataset(
-                        st.session_state.dataset, st.session_state.mapping, settings,
-                        status=progress.write, cell_progress=update_cells, rows_per_chunk=5,
-                    )
-                progress.write(f"Saving NetCDF result to {output_path}")
-                st.session_state.results.to_netcdf(output_path, mode="w")
-                st.session_state.current_result_path = output_path
-                progress.update(label="Simulation complete and result saved", state="complete", expanded=False)
-                st.success(f"Simulation complete. Result saved automatically to `{output_path}`.")
-            except Exception as exc:
-                progress.update(label="Simulation or result saving failed", state="error", expanded=True)
-                st.exception(exc)
+            with run_progress_slot.container():
+                cell_bar = st.progress(0, text="Waiting to start calculation")
+                def update_cells(done, total):
+                    cell_bar.progress(done / total, text=f"Calculating {done:,}/{total:,} cells")
+                progress = st.status("Preparing simulation…", expanded=True)
+                try:
+                    with st.spinner("Starting the Java backend and running the doublet calculation…"):
+                        st.session_state.results = simulate_dataset(
+                            st.session_state.dataset, st.session_state.mapping, settings,
+                            status=progress.write, cell_progress=update_cells, rows_per_chunk=5,
+                        )
+                    progress.write(f"Saving NetCDF result to {output_path}")
+                    st.session_state.results.to_netcdf(output_path, mode="w")
+                    st.session_state.current_result_path = output_path
+                    progress.update(label="Simulation complete and result saved", state="complete", expanded=False)
+                    st.success(f"Simulation complete. Result saved automatically to `{output_path}`.")
+                except Exception as exc:
+                    progress.update(label="Simulation or result saving failed", state="error", expanded=True)
+                    st.exception(exc)
 
 with tabs[5]:
     st.subheader("Geothermal results")
+    result_removal_notice = st.session_state.pop("result_removal_notice", None)
+    if result_removal_notice:
+        st.success(result_removal_notice)
     st.write("Open a saved project result or an external NetCDF result, then inspect each output with its unit and calculation explanation.")
     active_output_key = st.session_state.get("active_source_folder_key", "2d_best_fit")
     active_output_subfolder = OUTPUT_SUBFOLDERS.get(active_output_key, OUTPUT_SUBFOLDERS["2d_best_fit"])
@@ -2044,7 +2574,7 @@ with tabs[5]:
         if path.suffix.lower() in {".nc", ".netcdf"}
     ]
     st.caption(f"Active output folder: `{active_output_folder}`")
-    result_selector, result_action = st.columns([4, 1], vertical_alignment="bottom")
+    result_selector, result_action, result_remove = st.columns([4, 1, 1], vertical_alignment="bottom")
     selected_result = result_selector.selectbox(
         "Open project result", ["—"] + existing_results,
         format_func=lambda path: "—" if path == "—" else path.name,
@@ -2059,6 +2589,12 @@ with tabs[5]:
             st.success(f"Loaded project result: {selected_result.name}")
         except Exception as exc:
             st.error(f"Could not load project result: {exc}")
+    if result_remove.button(
+        "Remove result",
+        disabled=selected_result == "—",
+        width="stretch",
+    ):
+        confirm_remove_result(active_project, active_output_subfolder, selected_result)
 
     result_file = st.file_uploader(
         "Or open an external NetCDF results file", type=["nc", "netcdf"], key="results_file",
