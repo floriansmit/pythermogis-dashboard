@@ -75,6 +75,55 @@ def default_settings() -> dict[str, object]:
         "utc_cutoff": 5.1,
         "temperature_gradient": 31.0,
         "surface_temperature": 10.0,
+        "use_heatpump": False,
+        "use_electric_heat_in_power": False,
+        "min_production_temp": 20.0,
+        "dh_return_temp": 30.0,
+        "minimum_injection_temperature": 15.0,
+        "goal_temperature": 70.0,
+        "max_cooling_temperature_range": 100.0,
+        "heat_exchanger_efficiency": 1.0,
+        "heat_exchanger_parasitic": 0.0,
+        "heat_pump_capex": 600.0,
+        "heat_pump_opex": 60.0,
+        "heat_pump_alternative_heating_price": 2.8,
+    }
+
+
+def settings_presets() -> dict[str, dict[str, object]]:
+    """Return versioned screening presets exposed by the dashboard.
+
+    The Netherlands values are the defaults shipped with Pythermogis 3.0.3.
+    The Denmark values are a transparent screening calibration for a medium
+    2,000 m, 80/40 °C district-heating case. They are not project quotations.
+    """
+    netherlands = default_settings()
+    denmark = netherlands | {
+        "max_flow": 300.0,
+        "pump_depth": 500.0,
+        "capex_variable": 750.0,
+        "opex_power": 50.0,
+        # Pythermogis/ThermoGIS uses euro-cents per kWh here. 0.307 €ct/kWh
+        # equals 3.07 €/MWh, the Danish 2,000 m catalogue central value.
+        "opex_energy": 0.307,
+        "economic_lifetime": 25,
+        "drilling_time": 4,
+        "tax_rate": 22.0,
+        "interest_loan": 3.5,
+        "equity_return": 3.5,
+        "temperature_gradient": 28.0,
+        "use_heatpump": True,
+        "use_electric_heat_in_power": False,
+        "min_production_temp": 40.0,
+        "dh_return_temp": 40.0,
+        "minimum_injection_temperature": 15.0,
+        "goal_temperature": 80.0,
+        "heat_pump_capex": 600.0,
+        "heat_pump_opex": 10.0,
+    }
+    return {
+        "Netherlands — Pythermogis 3.0.3 reference": netherlands,
+        "Denmark — 2,000 m district heat 80/40°C": denmark,
     }
 
 

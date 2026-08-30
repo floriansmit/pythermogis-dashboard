@@ -90,9 +90,11 @@ python run_dashboard.py --port 8503
    editable facies definitions and map, section, 3D, and table viewers.
 4. Optionally resample the grids, compare original and preview side by side, and
    validate the version that should be passed to Pythermogis.
-5. Stage changes in **Well design**, **Costs**, and **Economics**, then use each
-   tab's **Apply settings** button. The interface shows units, explanations,
-   defaults, and deviations.
+5. Choose the Netherlands or Denmark screening preset in the sidebar. Stage
+   project-specific changes in **Well design**, **Costs**, and **Economics**,
+   then use each section's **Apply settings** button. The Costs tab also exposes
+   direct-heat/heat-pump conversion settings. The interface shows units,
+   explanations, suggested country ranges, sources, and deviations.
 6. In **Simulation**, choose a unique result name and run the deterministic or
    requested-percentile calculation. The NetCDF is saved automatically.
 7. In **Results**, open a project or external NetCDF, inspect result definitions,

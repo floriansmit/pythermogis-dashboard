@@ -89,16 +89,46 @@ The single validation button uses the original grid when resampling is off and
 the resampled preview when it is on. Validation clearly states which version
 became the simulation input.
 
-## Model settings
+## Model settings and country presets
 
-Well, cost, economic, and calculated-temperature values are staged in forms, so
+The sidebar provides two explicit screening baselines:
+
+- **Netherlands — Pythermogis 3.0.3 reference** uses the defaults shipped by
+  the installed backend. These may differ from the older public ThermoGIS
+  scenario table.
+- **Denmark — 2,000 m district heat 80/40 °C** is a transparent screening
+  calibration based mainly on the Danish Energy Agency 2026 medium-depth case,
+  supplemented by GEUS guidance. It enables the heat pump and uses a 25-year
+  economic lifetime, 300 m³/h maximum flow, 500 m pump depth, 22% company tax,
+  and Danish screening CAPEX/OPEX values. It is not a project quotation.
+
+Selecting a name does not overwrite settings. Choose **Apply country preset**
+explicitly. Each editor then displays non-binding suggested ranges for that
+country. Compact links 1–3 identify TNO/Pythermogis sources and links 4–8 the
+Danish Energy Agency, GEUS, and Danish tax sources.
+
+Well, conversion, heat-pump, cost, economic, and calculated-temperature values are staged in forms, so
 editing a field does not immediately change the active calculation setup. Change
 several values and then choose **Apply settings**. Orange labels identify
-deviations from defaults; each field has a return-to-default control.
+deviations from the selected country baseline; each field has a return-to-preset
+control.
 
 Labels include units and expanded explanations. These cover producer–injector
 distance optimization, wellbore and pump assumptions, the well-cost polynomial,
-CAPEX/OPEX terms, and discounted economic assumptions.
+CAPEX/OPEX terms, discounted economic assumptions, direct heat, and optional
+heat-pump upgrading. Energy-dependent OPEX is entered in **€ct/kWh**: for
+example, `0.19` means `1.90 €/MWh`. This treats the public `€/kWh` label as a
+factor-100 documentation typo and passes the logically consistent backend value
+unchanged.
+
+Preset sources: [1 — TNO settings](https://pythermogis-15909e.ci.tno.nl/theory/utcprops/utc_props_TG/),
+[2 — TNO doublet](https://pythermogis-15909e.ci.tno.nl/theory/doublet_model/),
+[3 — TNO heat pump](https://pythermogis-15909e.ci.tno.nl/theory/energyconversion/directheatHP/),
+[4 — Danish Energy Agency data](https://ens.dk/media/8615/download),
+[5 — Danish Energy Agency technology brief](https://ens.dk/media/8616/download),
+[6 — Danish geothermal handbook](https://dybgeotermi.geus.dk/wp-content/uploads/Drejebog_om_Geotermi_2014.pdf),
+[7 — GEUS Danish plant assessment](https://dybgeotermi.geus.dk/wp-content/uploads/EGC2013-Assessment_Geothermal_Aquifer_Mathiesen_etal_2013.pdf), and
+[8 — Danish company tax](https://skat.dk/en-us/businesses/companies-and-foundations/companies-and-foundations/paying-tax-on-account-and-corporation-tax).
 
 ## Simulation
 
@@ -121,14 +151,16 @@ descriptive label and unit rather than only the backend variable name. For
 probabilistic outputs, the selector and map title show the actual P-value, such
 as P10, P50, or P90. The information panel explains the calculation, formula
 terms, units, relevant result variables, and stored applied settings where
-available.
+available. NPV maps use a symmetric break-even colour scale: zero is white,
+negative NPV is red, and positive NPV is green. Keeping equal negative and
+positive limits prevents the least-negative cells from appearing profitable.
 
 Location analysis accepts a selected map point, explicit X/Y coordinates, or an
 address. It plots NPV versus P-value and reports probability of success at the
 nearest grid cell.
 
 Use **Restore simulation setup from this result** to restore validated geology,
-mapping, geology-source mode, and applied well/cost/economic/temperature
+mapping, geology-source mode, and applied well/conversion/heat-pump/cost/economic/temperature
 settings. Older results without embedded provenance remain viewable but cannot
 fully reconstruct the previous state.
 
