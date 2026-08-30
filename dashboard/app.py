@@ -10,6 +10,7 @@ import sys
 import tempfile
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -34,6 +35,7 @@ from workflow import (
     convert_grdecl_to_dataset,
     dataset_from_single_grids,
     default_settings,
+    settings_presets,
     detect_grid_sources,
     ensure_project,
     export_dataset_to_zmaps,
@@ -105,7 +107,75 @@ st.markdown(
 
 
 DEFAULT_SETTINGS = default_settings()
+SETTINGS_PRESETS = settings_presets()
+NETHERLANDS_PRESET = "Netherlands — Pythermogis 3.0.3 reference"
+DENMARK_PRESET = "Denmark — 2,000 m district heat 80/40°C"
 THEORY_URL = "https://pythermogis-15909e.ci.tno.nl/theory/introduction/"
+PRESET_SOURCES = {
+    "1": "https://pythermogis-15909e.ci.tno.nl/theory/utcprops/utc_props_TG/",
+    "2": "https://pythermogis-15909e.ci.tno.nl/theory/doublet_model/",
+    "3": "https://pythermogis-15909e.ci.tno.nl/theory/energyconversion/directheatHP/",
+    "4": "https://ens.dk/media/8615/download",
+    "5": "https://ens.dk/media/8616/download",
+    "6": "https://dybgeotermi.geus.dk/wp-content/uploads/Drejebog_om_Geotermi_2014.pdf",
+    "7": "https://dybgeotermi.geus.dk/wp-content/uploads/EGC2013-Assessment_Geothermal_Aquifer_Mathiesen_etal_2013.pdf",
+    "8": "https://skat.dk/en-us/businesses/companies-and-foundations/companies-and-foundations/paying-tax-on-account-and-corporation-tax",
+}
+PRESET_SOURCE_NUMBERS = {
+    NETHERLANDS_PRESET: ("1", "2", "3"),
+    DENMARK_PRESET: ("4", "5", "6", "7", "8"),
+}
+# These are screening ranges, not validation constraints or project quotations.
+PRESET_RANGES: dict[str, dict[str, tuple[float, float]]] = {
+    NETHERLANDS_PRESET: {
+        "well_distance": (1000, 2000), "min_well_distance": (100, 500),
+        "max_well_distance": (2000, 3000), "max_flow": (200, 500),
+        "pump_efficiency": (0.5, 0.7), "pump_depth": (300, 500),
+        "outer_diameter": (8.5, 9.625), "inner_diameter": (8.5, 9.625),
+        "injector_skin": (-3, 0), "producer_skin": (-3, 0),
+        "well_cost_constant": (0.2, 0.4), "well_cost_depth": (500, 900),
+        "well_cost_depth2": (0.1, 0.3), "well_cost_scaling": (1.3, 1.5),
+        "capex_constant": (2, 5), "capex_variable": (300, 900),
+        "capex_contingency": (10, 25), "opex_power": (50, 100),
+        "opex_base": (0, 0.2), "opex_energy": (0, 0.3),
+        "opex_per_capex": (0, 2), "economic_lifetime": (15, 30),
+        "drilling_time": (2, 4), "load_hours": (6000, 8000),
+        "electricity_purchase_price": (5, 15), "tax_rate": (20, 25),
+        "interest_loan": (3, 6), "inflation": (1.5, 2.5),
+        "equity_return": (5, 14.5), "debt_equity": (60, 80),
+        "utc_cutoff": (3, 10), "temperature_gradient": (28, 33),
+        "surface_temperature": (8, 12), "min_production_temp": (20, 50),
+        "dh_return_temp": (25, 40), "minimum_injection_temperature": (10, 20),
+        "goal_temperature": (65, 80), "max_cooling_temperature_range": (40, 100),
+        "heat_exchanger_efficiency": (0.9, 1), "heat_exchanger_parasitic": (0, 0.05),
+        "heat_pump_capex": (500, 800), "heat_pump_opex": (10, 60),
+        "heat_pump_alternative_heating_price": (2.8, 10),
+    },
+    DENMARK_PRESET: {
+        "well_distance": (750, 2000), "min_well_distance": (100, 750),
+        "max_well_distance": (1500, 3000), "max_flow": (200, 500),
+        "pump_efficiency": (0.5, 0.7), "pump_depth": (300, 700),
+        "outer_diameter": (8.5, 9.625), "inner_diameter": (8.5, 9.625),
+        "injector_skin": (-3, 2), "producer_skin": (-3, 2),
+        "well_cost_constant": (0.2, 0.4), "well_cost_depth": (500, 900),
+        "well_cost_depth2": (0.1, 0.3), "well_cost_scaling": (1.3, 1.7),
+        "capex_constant": (3, 6), "capex_variable": (500, 1200),
+        "capex_contingency": (10, 30), "opex_power": (50, 100),
+        "opex_base": (0, 0.2), "opex_energy": (0.307, 0.402),
+        "opex_per_capex": (0, 2), "economic_lifetime": (25, 30),
+        "drilling_time": (3, 5), "load_hours": (5000, 7000),
+        "electricity_purchase_price": (5, 15), "tax_rate": (22, 22),
+        "interest_loan": (3, 6), "inflation": (1.5, 2.5),
+        "equity_return": (3.5, 10), "debt_equity": (50, 90),
+        "utc_cutoff": (3, 10), "temperature_gradient": (25, 30),
+        "surface_temperature": (8, 10), "min_production_temp": (40, 65),
+        "dh_return_temp": (35, 40), "minimum_injection_temperature": (10, 20),
+        "goal_temperature": (70, 80), "max_cooling_temperature_range": (40, 100),
+        "heat_exchanger_efficiency": (0.9, 1), "heat_exchanger_parasitic": (0, 0.05),
+        "heat_pump_capex": (500, 800), "heat_pump_opex": (10, 60),
+        "heat_pump_alternative_heating_price": (2.8, 10),
+    },
+}
 GEOLOGY_SOURCE_LABELS = {
     "2d_best_fit": "Classic 2D Grids — Deterministic",
     "2d_probabilistic": "Classic 2D Grids — Probabilistic",
@@ -116,7 +186,7 @@ GEOLOGY_SOURCE_KEYS = {
     label: source_key for source_key, label in GEOLOGY_SOURCE_LABELS.items()
 }
 
-SETTING_METADATA: dict[str, dict[str, str]] = {
+SETTING_METADATA: dict[str, dict[str, object]] = {
     "optimize_well_distance": {
         "label": "Optimize producer–injector distance", "unit": "boolean",
         "help": "Let DoubletCalc choose the reservoir-level well spacing within the minimum and maximum bounds. The optimization limits thermal breakthrough so the production–injection temperature difference remains approximately 99% of its initial value at the end of the technical lifetime.",
@@ -198,8 +268,8 @@ SETTING_METADATA: dict[str, dict[str, str]] = {
         "help": "Annual operating expenditure multiplied by net installed power capacity.",
     },
     "opex_energy": {
-        "label": "Energy-dependent annual OPEX", "unit": "€/kWh",
-        "help": "Variable operating expenditure multiplied by annual produced geothermal energy.",
+        "label": "Energy-dependent annual OPEX", "unit": "€ct/kWh",
+        "help": "Variable operating expenditure multiplied by annual produced geothermal energy. The backend value is euro-cents per kWh: 0.19 €ct/kWh equals 1.90 €/MWh. This follows the consistent cost conversion; the public unit label appears to omit the cent factor.",
     },
     "opex_per_capex": {
         "label": "Additional OPEX as share of CAPEX", "unit": "%/year",
@@ -253,6 +323,34 @@ SETTING_METADATA: dict[str, dict[str, str]] = {
         "label": "Surface temperature", "unit": "°C",
         "help": "Temperature intercept at zero depth used with the geothermal gradient to calculate reservoir temperature.",
     },
+    "use_heatpump": {
+        "label": "Use heat pump", "unit": "boolean",
+        "help": "Enable the Pythermogis direct-heat plus heat-pump conversion route. It raises useful output to the target district-heating supply temperature when direct geothermal heat alone is insufficient.",
+    },
+    "use_electric_heat_in_power": {
+        "label": "Include heat-pump electricity in heat output", "unit": "boolean",
+        "help": "Include purchased heat-pump electricity in reported useful heat. Leave off to report only geothermal-origin heat while still accounting for purchased electricity in costs.",
+    },
+    "min_production_temp": {
+        "label": "Minimum production temperature", "unit": "°C",
+        "help": "Minimum surface production temperature accepted by the direct-heat/heat-pump conversion scenario.",
+    },
+    "dh_return_temp": {
+        "label": "District-heating return temperature", "unit": "°C",
+        "help": "Temperature of water returning from the district-heating network before receiving geothermal heat.",
+    },
+    "minimum_injection_temperature": {
+        "label": "Minimum geothermal injection temperature", "unit": "°C",
+        "help": "Lower operating limit for cooled brine reinjected into the reservoir.",
+    },
+    "goal_temperature": {
+        "label": "District-heating supply target", "unit": "°C",
+        "help": "Required delivery temperature after direct exchange and, when enabled, heat-pump upgrading.",
+    },
+    "max_cooling_temperature_range": {
+        "label": "Maximum brine cooling range", "unit": "°C",
+        "help": "Maximum permitted temperature drop between produced and reinjected geothermal brine.",
+    },
     "heat_exchanger_efficiency": {
         "label": "Heat-conversion efficiency η", "unit": "fraction",
         "help": "Fraction of the available geothermal heat converted to useful output in the selected conversion scenario.",
@@ -260,6 +358,18 @@ SETTING_METADATA: dict[str, dict[str, str]] = {
     "heat_exchanger_parasitic": {
         "label": "Conversion parasitic-power fraction", "unit": "fraction",
         "help": "Fractional electricity demand of the surface conversion process deducted from useful output.",
+    },
+    "heat_pump_capex": {
+        "label": "Heat-pump CAPEX", "unit": "€/kW",
+        "help": "Installed heat-pump capital cost per kW of heat-pump thermal capacity.",
+    },
+    "heat_pump_opex": {
+        "label": "Heat-pump fixed OPEX", "unit": "€/kW/year",
+        "help": "Annual fixed operation and maintenance cost per kW of heat-pump thermal capacity.",
+    },
+    "heat_pump_alternative_heating_price": {
+        "label": "Alternative heating price", "unit": "€ct/kWh",
+        "help": "Reference price of alternative heat used by the heat-pump economic calculation.",
     },
 }
 
@@ -285,9 +395,26 @@ RESULT_METADATA: dict[str, dict[str, object]] = {
         "result_inputs": ["flow_rate", "prd_temp", "inj_temp"],
         "setting_inputs": ["heat_exchanger_efficiency", "heat_exchanger_parasitic", "pump_efficiency"],
     },
-    "heat_pump_power": {"label": "Heat output including heat pump", "unit": "MW", "calculation": "Total useful heat including the heat-pump contribution when that conversion option is active."},
+    "heat_pump_power": {
+        "label": "Heat output including heat pump", "unit": "MW",
+        "calculation": "Total useful district heat after direct geothermal exchange and heat-pump upgrading to the configured supply target. Pythermogis determines the heat-pump contribution and electricity demand from the geothermal production temperature, district-heating return, injection limit, and target temperature.",
+        "formula": "P_delivered = P_direct + P_heat-pump; COP_hp = P_heat-pump / P_electricity",
+        "terms": [
+            "P_direct: heat transferred directly from the produced geothermal fluid [MW].",
+            "P_heat-pump: useful thermal output supplied by the heat-pump stage [MW].",
+            "P_electricity: purchased electricity consumed by the heat pump [MW].",
+            "COP_hp: heat-pump coefficient of performance [dimensionless].",
+        ],
+        "result_inputs": ["power", "prd_temp", "inj_temp", "cophp"],
+        "setting_inputs": [
+            "use_heatpump", "use_electric_heat_in_power", "min_production_temp",
+            "dh_return_temp", "minimum_injection_temperature", "goal_temperature",
+            "max_cooling_temperature_range", "heat_pump_capex", "heat_pump_opex",
+            "electricity_purchase_price",
+        ],
+    },
     "capex": {"label": "Total capital expenditure", "unit": "million €", "calculation": "Sum of doublet well cost, optional stimulation cost, and fixed plus capacity-dependent plant CAPEX, including configured contingency.", "formula": "CAPEX_plant = CAPEX_base + CAPEX_variable · P_net", "terms": ["CAPEX_base: fixed plant cost [million €].", "CAPEX_variable: capacity-dependent plant cost [€/kW].", "P_net: net installed geothermal capacity [MW], converted to kW in the calculation."], "result_inputs": ["power"], "setting_inputs": ["capex_constant", "capex_variable", "capex_contingency", "well_cost_constant", "well_cost_depth", "well_cost_depth2", "well_cost_scaling"]},
-    "opex": {"label": "First-year operating expenditure", "unit": "million €/year", "calculation": "Fixed, capacity-dependent, energy-dependent, CAPEX-related, and purchased-electricity operating costs for the first operating year.", "formula": "OPEX = OPEX_base + OPEX_power · P_net + OPEX_energy · E_year + OPEX_CAPEX + electricity cost", "terms": ["OPEX_base: fixed annual operating cost [million €/year].", "OPEX_power: annual cost per installed capacity [€/(kW·year)].", "P_net: net installed geothermal capacity [MW].", "OPEX_energy: variable cost per produced energy [€/kWh].", "E_year: geothermal energy produced in the first year [MWh/year].", "Electricity cost covers ESP, conversion-process, and heat-pump electricity [€/year]."], "result_inputs": ["power", "hprod"], "setting_inputs": ["opex_base", "opex_power", "opex_energy", "opex_per_capex", "electricity_purchase_price", "load_hours"]},
+    "opex": {"label": "First-year operating expenditure", "unit": "million €/year", "calculation": "Fixed, capacity-dependent, energy-dependent, CAPEX-related, and purchased-electricity operating costs for the first operating year.", "formula": "OPEX = OPEX_base + OPEX_power · P_net + OPEX_energy · E_year + OPEX_CAPEX + electricity cost", "terms": ["OPEX_base: fixed annual operating cost [million €/year].", "OPEX_power: annual cost per installed capacity [€/(kW·year)].", "P_net: net installed geothermal capacity [MW].", "OPEX_energy: variable cost per produced energy [€ct/kWh]; divide by 100 for €/kWh.", "E_year: geothermal energy produced in the first year [MWh/year].", "Electricity cost covers ESP, conversion-process, and heat-pump electricity [€/year]."], "result_inputs": ["power", "hprod"], "setting_inputs": ["opex_base", "opex_power", "opex_energy", "opex_per_capex", "electricity_purchase_price", "load_hours"]},
     "utc": {"label": "Unit Technical Cost / LCOE", "unit": "€ct/kWh", "calculation": "Ratio of total discounted project cost to discounted tax-adjusted geothermal energy produced over the economic lifetime.", "formula": "UTC = discounted lifetime costs / discounted tax-adjusted geothermal energy", "terms": ["Discounted lifetime costs: CAPEX, financing, and discounted annual OPEX [€].", "Discounted tax-adjusted geothermal energy: lifetime heat production after tax and discounting [kWh].", "The result is converted from €/kWh to euro cents per kWh."], "result_inputs": ["capex", "opex", "hprod"], "setting_inputs": ["economic_lifetime", "tax_rate", "interest_loan", "inflation", "equity_return", "debt_equity"]},
     "npv": {"label": "Net present value", "unit": "million €", "calculation": "Value relative to the configured commercial UTC cutoff, using discounted heat production and the margin between that cutoff and the calculated UTC.", "formula": "NPV [million €] = 10⁻⁶ · 3.6 · H_prod · (1 − tax) · (UTC_cutoff − UTC)", "terms": ["H_prod: discounted geothermal heat production returned by ThermoGIS [MWh].", "tax: configured tax rate [fraction; the dashboard setting is entered as %].", "UTC_cutoff: commercial/reference heat price [€ct/kWh].", "UTC: calculated unit technical cost [€ct/kWh].", "The factors 3.6 and 10⁻⁶ reconcile the ThermoGIS energy/currency units and express the result in million €."], "result_inputs": ["hprod", "utc"], "setting_inputs": ["tax_rate", "utc_cutoff"]},
     "hprod": {"label": "Heat-production KPI", "unit": "API: TJ/year; theory KPI table: discounted MWh", "calculation": "Heat production derived from geothermal power and annual load hours. The public result-class documentation calls this annual heat production in TJ/year, while the theory KPI page describes Hprod as lifetime-discounted MWh; this viewer exposes that documentation inconsistency rather than silently choosing one interpretation."},
@@ -340,8 +467,14 @@ def field_mapping(dataset: xr.Dataset) -> dict[str, str]:
     return mapping
 
 
+def preset_reference_settings() -> dict[str, object]:
+    """Return the country baseline used by reset buttons and change flags."""
+    preset_name = st.session_state.get("settings_reference_preset", NETHERLANDS_PRESET)
+    return SETTINGS_PRESETS.get(preset_name, DEFAULT_SETTINGS)
+
+
 def setting_is_modified(field: str, value: object) -> bool:
-    default = DEFAULT_SETTINGS[field]
+    default = preset_reference_settings()[field]
     if isinstance(default, bool):
         return bool(value) != default
     return not np.isclose(float(value), float(default))
@@ -352,7 +485,7 @@ def setting_increment(field: str, default: object) -> float | int:
     if isinstance(default, int) and not isinstance(default, bool):
         return 1
     metadata = SETTING_METADATA[field]
-    unit = metadata["unit"].lower()
+    unit = str(metadata["unit"]).lower()
     if unit in {"fraction", "dimensionless"} or abs(float(default)) <= 1.0:
         return 0.1
     return 1.0
@@ -367,7 +500,7 @@ def settings_editor(
     st.write(introduction)
     st.caption(
         "Edit as many values as needed without rerunning the page. Orange labels identify draft "
-        "values that differ from the model defaults. Select Apply settings at the bottom to use "
+        "values that differ from the selected country preset. Select Apply settings at the bottom to use "
         "the complete draft configuration."
     )
     for field in fields:
@@ -384,16 +517,16 @@ def settings_editor(
     if pending_count:
         st.info(f"{pending_count} staged change{'s' if pending_count != 1 else ''} are not yet applied.")
     elif draft_modified_count:
-        st.warning(f"{draft_modified_count} applied setting{'s' if draft_modified_count != 1 else ''} differ from the model defaults.")
+        st.warning(f"{draft_modified_count} applied setting{'s' if draft_modified_count != 1 else ''} differ from the selected country preset.")
     else:
-        st.success("Model defaults active for this section.")
+        st.success("Selected country-preset values active for this section.")
 
     form_key = "settings_form_" + "_".join(title.lower().split())
     reset_field: str | None = None
     with st.form(form_key):
         columns = st.columns(2, gap="large")
         for index, field in enumerate(fields):
-            default = DEFAULT_SETTINGS[field]
+            default = preset_reference_settings()[field]
             metadata = SETTING_METADATA[field]
             draft_value = st.session_state[f"setting_draft_{field}"]
             modified = setting_is_modified(field, draft_value)
@@ -419,7 +552,14 @@ def settings_editor(
                         key=f"reset_draft_{form_key}_{field}",
                     ):
                         reset_field = field
-                st.caption(metadata["help"])
+                st.caption(str(metadata["help"]))
+                suggested_range = PRESET_RANGES.get(
+                    st.session_state.get("settings_reference_preset", NETHERLANDS_PRESET), {}
+                ).get(field)
+                if suggested_range:
+                    low, high = suggested_range
+                    range_text = f"{low:g}" if low == high else f"{low:g}–{high:g}"
+                    st.caption(f"Suggested screening range: **{range_text} {unit}**")
 
         st.divider()
         apply_column, defaults_column = st.columns([3, 2])
@@ -427,23 +567,59 @@ def settings_editor(
             "Apply settings", type="primary", width="stretch", key=f"apply_{form_key}",
         )
         reset_all_clicked = defaults_column.form_submit_button(
-            "Reset draft to model defaults", width="stretch", key=f"reset_all_{form_key}",
+            "Reset draft to preset", width="stretch", key=f"reset_all_{form_key}",
         )
 
     if reset_field is not None:
-        st.session_state[f"setting_draft_{reset_field}"] = DEFAULT_SETTINGS[reset_field]
+        st.session_state[f"setting_draft_{reset_field}"] = preset_reference_settings()[reset_field]
         st.rerun()
     if reset_all_clicked:
         for field in fields:
-            st.session_state[f"setting_draft_{field}"] = DEFAULT_SETTINGS[field]
+            st.session_state[f"setting_draft_{field}"] = preset_reference_settings()[field]
         st.rerun()
     if apply_clicked:
         for field in fields:
             settings[field] = st.session_state[f"setting_draft_{field}"]
+        st.session_state.active_settings_preset = "Custom"
         st.success("Settings applied. This configuration will be used by the model.")
 
     if show_docs_link:
         st.markdown(f"[Open the Pythermogis theory documentation]({THEORY_URL})")
+
+
+def country_preset_selector(settings: dict[str, object]) -> None:
+    """Render an explicit preset selector without silently overwriting edits."""
+    st.subheader("Country preset")
+    selected = st.selectbox(
+        "Reference case", list(SETTINGS_PRESETS), key="settings_preset_selector",
+        help="Select a baseline, then apply it explicitly. Suggested ranges remain guidance only.",
+    )
+    source_links = " ".join(
+        f"[{number}]({PRESET_SOURCES[number]})"
+        for number in PRESET_SOURCE_NUMBERS[selected]
+    )
+    if selected == DENMARK_PRESET:
+        st.caption(
+            "Screening case based on the Danish Energy Agency's 2026 medium 2 km, "
+            "80/40 °C district-heat case, supplemented by GEUS guidance. Links: " + source_links
+        )
+    else:
+        st.caption(
+            "Reference values shipped with Pythermogis 3.0.3; project values may differ "
+            "from the older public ThermoGIS scenario table. Links: " + source_links
+        )
+    if st.button("Apply country preset", type="primary", width="stretch"):
+        selected_values = SETTINGS_PRESETS[selected]
+        settings.clear()
+        settings.update(selected_values)
+        for field, value in selected_values.items():
+            st.session_state[f"setting_draft_{field}"] = value
+        st.session_state.settings_reference_preset = selected
+        st.session_state.active_settings_preset = selected
+        st.rerun()
+    active = st.session_state.get("active_settings_preset", NETHERLANDS_PRESET)
+    baseline = st.session_state.get("settings_reference_preset", NETHERLANDS_PRESET)
+    st.caption(f"Applied: **{active}**  ·  Range baseline: **{baseline}**")
 
 
 def is_depth_property(variable: str) -> bool:
@@ -528,6 +704,35 @@ def _expand_cell_centres_to_corners(values: np.ndarray) -> np.ndarray:
     return corners
 
 
+NPV_COLORSCALE = [
+    [0.0, "#8b0000"],
+    [0.25, "#e76f61"],
+    [0.5, "#ffffff"],
+    [0.75, "#73c476"],
+    [1.0, "#006d2c"],
+]
+NPV_MATPLOTLIB_COLORMAP = LinearSegmentedColormap.from_list(
+    "npv_break_even", [(position, colour) for position, colour in NPV_COLORSCALE]
+)
+
+
+def map_colour_configuration(
+    variable: str, values: np.ndarray
+) -> tuple[object, float, float, bool]:
+    """Return a meaningful colour scale and limits for a mapped variable."""
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if not finite.size:
+        return "Viridis", 0.0, 1.0, False
+    value_min, value_max = float(finite.min()), float(finite.max())
+    if variable.lower() == "npv":
+        symmetric_limit = max(abs(value_min), abs(value_max))
+        if symmetric_limit == 0:
+            symmetric_limit = 1.0
+        return NPV_COLORSCALE, -symmetric_limit, symmetric_limit, False
+    return "Viridis", value_min, value_max, is_depth_property(variable)
+
+
 def interactive_curvilinear_figure(
     grid: xr.DataArray, variable: str, boundary
 ) -> go.Figure:
@@ -550,13 +755,15 @@ def interactive_curvilinear_figure(
     valid_cells = np.argwhere(np.isfinite(values))
     if valid_cells.size:
         valid_values = values[tuple(valid_cells.T)]
-        value_min = float(valid_values.min())
-        value_max = float(valid_values.max())
-        if value_max > value_min:
-            fractions = (valid_values - value_min) / (value_max - value_min)
+        colorscale, colour_min, colour_max, reverse_scale = map_colour_configuration(
+            variable, valid_values
+        )
+        if colour_max > colour_min:
+            fractions = (valid_values - colour_min) / (colour_max - colour_min)
+            fractions = np.clip(fractions, 0.0, 1.0)
         else:
             fractions = np.full(valid_values.shape, 0.5)
-        if is_depth_property(variable):
+        if reverse_scale:
             fractions = 1.0 - fractions
 
         # Group cells into a modest number of colour traces. This keeps the
@@ -581,7 +788,7 @@ def interactive_curvilinear_figure(
                 polygon_x.extend([*cell_x, cell_x[0], None])
                 polygon_y.extend([*cell_y, cell_y[0], None])
             colour_fraction = (float(colour_bin) + 0.5) / colour_bin_count
-            fill_colour = sample_colorscale("Viridis", [colour_fraction])[0]
+            fill_colour = sample_colorscale(colorscale, [colour_fraction])[0]
             figure.add_trace(
                 go.Scattergl(
                     x=polygon_x,
@@ -607,10 +814,11 @@ def interactive_curvilinear_figure(
                     "size": 1,
                     "opacity": 0.001,
                     "color": valid_values,
-                    "colorscale": "Viridis",
-                    "reversescale": is_depth_property(variable),
-                    "cmin": value_min,
-                    "cmax": value_max,
+                    "colorscale": colorscale,
+                    "reversescale": reverse_scale,
+                    "cmin": colour_min,
+                    "cmax": colour_max,
+                    "cmid": 0.0 if variable.lower() == "npv" else None,
                     "showscale": True,
                     "colorbar": {"title": colorbar_title},
                 },
@@ -885,6 +1093,11 @@ def show_grid_viewer(
                 "The map scale is locked equally in X and Y, and the original rotated cells are "
                 "displayed without north–south resampling."
             )
+            if variable.lower() == "npv":
+                st.caption(
+                    "NPV uses a symmetric break-even scale: **white = 0 million €**, "
+                    "red = negative NPV, and green = positive NPV."
+                )
             st.plotly_chart(
                 figure,
                 key=f"{key_prefix}_{variable}_interactive_curvilinear_map",
@@ -899,13 +1112,19 @@ def show_grid_viewer(
             metadata = RESULT_METADATA.get(variable, {})
             unit = metadata.get("unit") or grid.attrs.get("units", "")
             colorbar_title = f"{variable} [{unit}]" if unit else variable
+            colorscale, colour_min, colour_max, reverse_scale = map_colour_configuration(
+                variable, display_grid.values
+            )
             figure = go.Figure(
                 go.Heatmap(
                     x=grid[x_dim].values,
                     y=grid[y_dim].values,
                     z=display_grid.values,
-                    colorscale="Viridis",
-                    reversescale=is_depth_property(variable),
+                    colorscale=colorscale,
+                    reversescale=reverse_scale,
+                    zmin=colour_min,
+                    zmax=colour_max,
+                    zmid=0.0 if variable.lower() == "npv" else None,
                     zsmooth=False,
                     xgap=0.35,
                     ygap=0.35,
@@ -971,6 +1190,12 @@ def show_grid_viewer(
                 "Hover over a cell to read its value. Scroll to zoom; drag to zoom or pan. "
                 "The map scale is locked equally in X and Y."
             )
+            if variable.lower() == "npv":
+                st.caption(
+                    "NPV uses a symmetric break-even scale: **white = 0 million €**, "
+                    "red = negative NPV, and green = positive NPV. Unused colours remain visible "
+                    "when the current map contains values on only one side of zero."
+                )
             st.plotly_chart(
                 figure,
                 key=f"{key_prefix}_{variable}_interactive_map",
@@ -992,11 +1217,19 @@ def show_grid_viewer(
             else:
                 x_dim = "x" if "x" in grid.dims else grid.dims[-1]
                 y_dim = "y" if "y" in grid.dims else grid.dims[0]
+                colorscale, colour_min, colour_max, reverse_scale = map_colour_configuration(
+                    variable, grid.values
+                )
                 grid.plot(
                     ax=ax,
                     x=x_dim,
                     y=y_dim,
-                    cmap="viridis_r" if is_depth_property(variable) else "viridis",
+                    cmap=(
+                        NPV_MATPLOTLIB_COLORMAP if variable.lower() == "npv"
+                        else "viridis_r" if reverse_scale else "viridis"
+                    ),
+                    vmin=colour_min,
+                    vmax=colour_max,
                 )
             if boundary is not None:
                 try:
@@ -1672,7 +1905,31 @@ def restore_simulation_state_from_result(result: xr.Dataset, project_name: str) 
         st.session_state.settings.update(exposed_settings)
         for name, value in exposed_settings.items():
             st.session_state[f"setting_draft_{name}"] = value
-        restored.append(f"well, cost, economic, and temperature settings ({len(exposed_settings)} values)")
+        matched_preset = next(
+            (
+                preset_name for preset_name, preset_values in SETTINGS_PRESETS.items()
+                if all(
+                    name in exposed_settings
+                    and (
+                        bool(exposed_settings[name]) == bool(value)
+                        if isinstance(value, bool)
+                        else np.isclose(float(exposed_settings[name]), float(value))
+                    )
+                    for name, value in preset_values.items()
+                )
+            ),
+            None,
+        )
+        if matched_preset:
+            st.session_state.settings_reference_preset = matched_preset
+            st.session_state.settings_preset_selector = matched_preset
+            st.session_state.active_settings_preset = matched_preset
+        else:
+            st.session_state.active_settings_preset = "Custom (restored result)"
+        restored.append(
+            f"well, conversion, heat-pump, cost, economic, and temperature settings "
+            f"({len(exposed_settings)} values)"
+        )
     else:
         unavailable.append("model settings")
 
@@ -1947,11 +2204,19 @@ def show_location_analysis(results: xr.Dataset, boundary) -> None:
 st.title("Pythermogis dashboard")
 st.caption("Project-based Pythermogis workflow for 2D grids and GRDECL-derived maps.")
 
+settings = state("settings", default_settings)
+for setting_name, setting_value in DEFAULT_SETTINGS.items():
+    settings.setdefault(setting_name, setting_value)
+st.session_state.setdefault("settings_reference_preset", NETHERLANDS_PRESET)
+st.session_state.setdefault("active_settings_preset", NETHERLANDS_PRESET)
+
 with st.sidebar:
     if LOGO_PATH.exists():
         st.image(LOGO_PATH, width="stretch")
         st.divider()
     active_project = project_sidebar()
+    st.divider()
+    country_preset_selector(settings)
     st.divider()
     st.write("Workspace layout")
     st.code(
@@ -1962,7 +2227,6 @@ with st.sidebar:
 
 workflow = "Pythermogis"
 
-settings = state("settings", default_settings)
 dataset = state("dataset", lambda: None)
 boundary = state("boundary", lambda: None)
 mapping = state("mapping", dict)
@@ -2686,6 +2950,21 @@ with tabs[1]:
     )
 
 with tabs[2]:
+    settings_editor(
+        settings,
+        [
+            "use_heatpump", "use_electric_heat_in_power", "min_production_temp",
+            "dh_return_temp", "minimum_injection_temperature", "goal_temperature",
+            "max_cooling_temperature_range", "heat_exchanger_efficiency",
+            "heat_exchanger_parasitic", "heat_pump_capex", "heat_pump_opex",
+            "heat_pump_alternative_heating_price",
+        ],
+        "Energy conversion and heat pump",
+        "Choose direct geothermal heat or enable Pythermogis' heat-pump route. The temperature "
+        "controls describe the geothermal and district-heating interfaces; the CAPEX, OPEX, and "
+        "electricity settings are included in the economic result.",
+    )
+    st.divider()
     settings_editor(
         settings,
         ["well_cost_constant", "well_cost_depth", "well_cost_depth2", "well_cost_scaling", "capex_constant", "capex_variable", "capex_contingency", "opex_base", "opex_power", "opex_energy", "opex_per_capex"],
