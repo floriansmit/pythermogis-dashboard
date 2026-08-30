@@ -1,6 +1,6 @@
 # Pythermogis Dashboard
 
-![GO-Forward project logo](dashboard/GO-Forward.png)
+![GO-Forward project logo](dashboard/GO-Forward-transparent.png)
 
 A project-based Streamlit dashboard for preparing geological inputs, configuring
 Pythermogis doublet calculations, running deterministic or probabilistic
@@ -14,10 +14,7 @@ simulations, and inspecting spatial and location-specific results.
 > [Pythermogis documentation](https://pythermogis-15909e.ci.tno.nl/) and the
 > [ThermoGIS disclaimer](https://www.thermogis.nl/en/disclaimer) before use.
 
-## Folder structure
-
-The repository keeps the Streamlit application in a dedicated `dashboard`
-folder, with its starters and project data at the root:
+## Repository layout
 
 ```text
 pythermogis-dashboard/
@@ -27,16 +24,17 @@ pythermogis-dashboard/
 ├─ uv.lock
 ├─ dashboard/
 │  ├─ app.py
-│  ├─ GO-Forward.png
+│  ├─ GO-Forward-transparent.png
 │  └─ src/workflow.py
-├─ data/                  # local project inputs and outputs; ignored by Git
+├─ data/
+│  └─ demo-project/       # compact example inputs committed for evaluation
 ├─ docs/
 └─ .venv/                 # created by UV; ignored by Git
 ```
 
 There is no separate Pythermogis source folder required beside the dashboard.
 UV installs the released `pythermogis`, `pygridsio`, and `pygridsio3d` packages
-inside `.venv`. The `.venv` folder is machine-generated and never committed.
+inside `.venv`. The environment is machine-generated and never committed.
 
 ## Install and run
 
@@ -48,9 +46,9 @@ On Windows:
 winget install --id astral-sh.uv -e
 ```
 
-Close and reopen the terminal if the `uv` command is not immediately available.
+Close and reopen the terminal if `uv` is not immediately available.
 
-### 2. Clone and install the dashboard
+### 2. Clone and install
 
 These commands work from any parent directory:
 
@@ -60,15 +58,12 @@ cd pythermogis-dashboard
 python install_dashboard.py
 ```
 
-The root-level installer runs `uv sync --locked --system-certs`, which:
+The root installer runs `uv sync --locked --system-certs`. It installs the
+required Python version when needed, creates `.venv`, and installs the exact
+versions in `uv.lock`, including Pythermogis 3.0.3 from TNO's registry. Manual
+environment activation is not required.
 
-- installs the correct Python version when needed;
-- creates `.venv` in the dashboard folder;
-- installs the exact versions recorded in `uv.lock`;
-- installs Pythermogis 3.0.3 from TNO's package registry;
-- installs the grid and GRDECL libraries from their package registries.
-
-Do not activate the environment manually. The equivalent direct UV command is:
+The equivalent direct command is:
 
 ```powershell
 uv sync --locked --system-certs
@@ -88,17 +83,24 @@ python run_dashboard.py --port 8503
 
 ## Dashboard workflow
 
-1. Create or open a project in the sidebar.
-2. Select deterministic/probabilistic 2D grids, one GRDECL, or multiple GRDECLs.
-3. Import and inspect the required files in **Geology input**.
-4. Optionally resample, preview, and validate the simulation grid.
-5. Apply settings in **Well design**, **Cost model**, and **Economic model**.
-6. Name and run the calculation in **Geothermal simulation**.
-7. Open the saved NetCDF file in **Geothermal results**.
+1. Create or open a project in the sidebar, or use the included `demo-project`.
+2. In **Geology**, select deterministic/probabilistic classic 2D grids, one
+   best-fit GRDECL, or multiple GRDECL scenarios.
+3. Import, inspect, and map the required properties. GRDECL workflows expose
+   editable facies definitions and map, section, 3D, and table viewers.
+4. Optionally resample the grids, compare original and preview side by side, and
+   validate the version that should be passed to Pythermogis.
+5. Stage changes in **Well design**, **Costs**, and **Economics**, then use each
+   tab's **Apply settings** button. The interface shows units, explanations,
+   defaults, and deviations.
+6. In **Simulation**, choose a unique result name and run the deterministic or
+   requested-percentile calculation. The NetCDF is saved automatically.
+7. In **Results**, open a project or external NetCDF, inspect result definitions,
+   maps, statistics, percentiles, and location analysis, or export ZMAP grids.
+8. New results embed validated inputs and applied settings. Use **Restore
+   simulation setup from this result** to return the other tabs to that state.
 
-## Data layout
-
-Each project is isolated under the local `data` directory:
+## Project data layout
 
 ```text
 data/<project>/
@@ -106,7 +108,8 @@ data/<project>/
 │  ├─ 2d_grid_best_fit/
 │  ├─ 2d_grid_probabilistic/
 │  ├─ 3d_grdecl_best_fit/
-│  └─ 3d_grdecl_multi_realization/
+│  ├─ 3d_grdecl_multi_realization/
+│  └─ boundaries/
 └─ output_data/
    ├─ 2d_grid_best_fit/
    ├─ 2d_grid_probabilistic/
@@ -114,23 +117,43 @@ data/<project>/
    └─ 3d_grdecl_multi_realization/
 ```
 
-The contents of `data` are ignored by Git because geological models and results
-can be large or confidential. Back up project data separately when required.
+Normal project contents and all generated outputs are ignored by Git because
+geological models and results can be large or confidential. The repository makes
+one deliberate exception for compact inputs under `data/demo-project/input_data`:
 
-## Geology dependencies
+- 2.5 km deterministic and probabilistic Gassum ZMAP grids;
+- one reduced best-fit GRDECL with `FACIES`, `PORO50`, and `PERM50`;
+- five reduced multi-scenario GRDECL files with facies-based porosity and
+  permeability values;
+- editable facies-definition JSON files; and
+- a Danish coastline shapefile for boundary-overlay testing.
 
-The dashboard uses installed packages, not neighboring source folders:
+The demo project's generated outputs remain ignored. Back up all local project
+data separately when required.
+
+## Result provenance and ZMAP export
+
+Each new NetCDF result stores dashboard provenance: validated simulation grids,
+field mapping, geology-source mode, applied well/cost/economic settings,
+temperature assumptions, project, and requested percentiles. Older or external
+NetCDF files remain viewable but can restore only information they contain.
+
+**Export ZMAP grids** writes supported rectilinear result slices and embedded
+validated inputs to a sibling folder named `<result-stem>_Zmap`. Probabilistic
+outputs are separated into files labelled with their actual percentile, such as
+`P10`, `P50`, and `P90`. Unsupported geometry and non-2D variables are reported
+as skipped.
+
+## Installed geology dependencies
 
 | Package | Dashboard use |
 |---|---|
-| `pythermogis` | Aquifer objects, model settings, Java-backed doublet simulation |
-| `pygridsio` | Reading/writing grids and resampling |
-| `pygridsio3d` | Reading and converting GRDECL models |
+| `pythermogis` | Aquifer objects, settings, and Java-backed doublet simulation |
+| `pygridsio` | Reading/writing 2D grids and resampling |
+| `pygridsio3d` | Reading, inspecting, and aggregating GRDECL models |
 
-GRDECL inspection and conversion are implemented through `pygridsio3d` in
-`dashboard/src/workflow.py`.
-
-See [Dependency architecture](docs/DEPENDENCIES.md) for the exact boundary.
+The dashboard uses installed packages, not neighbouring source directories. See
+[Dependency architecture](docs/DEPENDENCIES.md) for the exact boundary.
 
 ## Updating dependencies
 
@@ -152,15 +175,21 @@ Review and commit both `pyproject.toml` and `uv.lock` when dependencies change.
 ## Verification
 
 ```powershell
-uv run python -m py_compile dashboard/app.py dashboard/src/workflow.py install_dashboard.py run_dashboard.py
-uv run python -c "import pythermogis, pygridsio, pygridsio3d; print('Dependencies available')"
+uv run --locked python -m compileall -q dashboard
+uv run --locked python -c "import pythermogis, pygridsio, pygridsio3d; print('Dependencies available')"
 ```
 
-The first actual calculation may install/start Java 17 and take longer than
-subsequent runs. The simulation tab reports Java startup and cell/chunk progress.
+The first calculation may install/start Java 17 and take longer than subsequent
+runs. The Simulation tab reports Java startup and cell/chunk progress.
 
 ## Scope
 
 This is a research decision-support interface for indicative geothermal
 assessment. It is not a substitute for site-specific reservoir engineering,
 well design, cost estimation, permitting, or investment due diligence.
+
+## Documentation
+
+- [User guide](docs/USER_GUIDE.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Dependency architecture](docs/DEPENDENCIES.md)
