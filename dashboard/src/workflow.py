@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+from itertools import product
+import json
 from pathlib import Path
 import os
 import shutil
@@ -27,6 +30,7 @@ OUTPUT_SUBFOLDERS = {
     "grdecl_best_fit": "output_data/3d_grdecl_best_fit",
     "grdecl_multi": "output_data/3d_grdecl_multi_realization",
 }
+SIMULATION_INPUT_PREFIX = "dashboard_input__"
 
 
 def default_settings() -> dict[str, object]:
@@ -430,6 +434,105 @@ def load_dataset(source: Path | object) -> xr.Dataset:
     return xr.load_dataset(source).load()
 
 
+def export_dataset_to_zmaps(
+    dataset: xr.Dataset,
+    output_dir: Path,
+    *,
+    input_prefix: str = SIMULATION_INPUT_PREFIX,
+    include_embedded_inputs: bool = True,
+    unit_lookup: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Export every rectilinear 2D result slice and embedded input as ZMAP."""
+    from pygridsio import write_grid
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    input_dir = output_dir / "input_data"
+    units = unit_lookup or {}
+    exported: list[Path] = []
+    skipped: list[str] = []
+    manifest_rows: list[dict[str, object]] = []
+
+    def safe_component(value: object) -> str:
+        text = str(value).strip().replace(" ", "_")
+        return "".join(character if character.isalnum() or character in "-_" else "_" for character in text)
+
+    def coordinate_label(dimension: str, value: object) -> str:
+        if isinstance(value, (np.floating, float)):
+            rendered = f"{float(value):g}"
+        elif isinstance(value, (np.integer, int)):
+            rendered = str(int(value))
+        else:
+            rendered = str(value)
+        return f"P{rendered}" if dimension == "p_value" else f"{dimension}_{rendered}"
+
+    for stored_name, stored_grid in dataset.data_vars.items():
+        is_input = stored_name.startswith(input_prefix)
+        if is_input and not include_embedded_inputs:
+            continue
+        variable_name = stored_name.removeprefix(input_prefix) if is_input else stored_name
+        destination_dir = input_dir if is_input else output_dir
+
+        if "x" not in stored_grid.dims or "y" not in stored_grid.dims:
+            skipped.append(f"{variable_name}: no x/y grid dimensions")
+            continue
+        if (
+            "map_x" in stored_grid.coords
+            and "map_y" in stored_grid.coords
+            and stored_grid.coords["map_x"].ndim == 2
+        ):
+            skipped.append(
+                f"{variable_name}: rotated/curvilinear coordinates cannot be represented by ZMAP"
+            )
+            continue
+
+        extra_dimensions = [
+            dimension for dimension in stored_grid.dims
+            if dimension not in {"x", "y"}
+        ]
+        index_combinations = product(
+            *(range(stored_grid.sizes[dimension]) for dimension in extra_dimensions)
+        ) if extra_dimensions else [()]
+        for combination in index_combinations:
+            selection = dict(zip(extra_dimensions, combination))
+            grid = stored_grid.isel(selection).transpose("y", "x")
+            suffixes: list[str] = []
+            dimension_values: dict[str, object] = {}
+            for dimension, index in selection.items():
+                value = (
+                    stored_grid.coords[dimension].values[index]
+                    if dimension in stored_grid.coords else index
+                )
+                if isinstance(value, np.generic):
+                    value = value.item()
+                dimension_values[dimension] = value
+                suffixes.append(coordinate_label(dimension, value))
+            filename_parts = [safe_component(variable_name), *map(safe_component, suffixes)]
+            destination_dir.mkdir(parents=True, exist_ok=True)
+            destination = destination_dir / ("_".join(filename_parts) + ".zmap")
+            write_grid(grid, destination)
+            exported.append(destination)
+            manifest_rows.append(
+                {
+                    "file": str(destination.relative_to(output_dir)),
+                    "kind": "validated input" if is_input else "simulation result",
+                    "variable": variable_name,
+                    "unit": units.get(variable_name, stored_grid.attrs.get("units", "")),
+                    **dimension_values,
+                }
+            )
+
+    manifest_path = output_dir / "zmap_manifest.csv"
+    pd.DataFrame(manifest_rows).to_csv(manifest_path, index=False)
+    return {
+        "output_dir": output_dir,
+        "exported": exported,
+        "skipped": skipped,
+        "manifest": manifest_path,
+        "input_count": sum(row["kind"] == "validated input" for row in manifest_rows),
+        "result_count": sum(row["kind"] == "simulation result" for row in manifest_rows),
+    }
+
+
 def load_grid_source(source: Path | object) -> xr.DataArray:
     """Read one NetCDF, GeoTIFF, ZMAP, or ASCII grid path/upload as a DataArray."""
     source_name = getattr(source, "name", str(source))
@@ -776,6 +879,34 @@ def utc_settings_from_dashboard(settings_values: dict[str, object]):
     return UTCSettings(**translated)
 
 
+def initialize_bundled_log4j_silently(jpype_module) -> None:
+    """Initialize the JAR's legacy Log4j class without its unavoidable warning.
+
+    The ThermoGIS fat JAR contains the Java-9 ``StackLocator`` implementation,
+    but its manifest is not marked as a multi-release JAR. Java 17 consequently
+    loads the legacy class, whose static initializer writes a compatibility
+    warning directly to ``System.out``. Temporarily redirect only that one class
+    initialization; Java output is restored before any model calculation.
+    """
+    if not jpype_module.isJVMStarted():
+        return
+    java_system = jpype_module.JClass("java.lang.System")
+    original_output = java_system.out
+    try:
+        print_stream = jpype_module.JClass("java.io.PrintStream")
+        output_stream = jpype_module.JClass("java.io.OutputStream")
+        java_system.setOut(print_stream(output_stream.nullOutputStream()))
+        jpype_module.JClass(
+            "org.apache.logging.log4j.util.StackLocator"
+        ).getInstance()
+    except Exception:
+        # A future ThermoGIS/Log4j build may remove or replace this class. That
+        # should not prevent a simulation from running.
+        pass
+    finally:
+        java_system.setOut(original_output)
+
+
 def simulate_dataset(
     dataset: xr.Dataset,
     mapping: dict[str, str],
@@ -792,6 +923,7 @@ def simulate_dataset(
     from pythermogis.doublet import ThermoGISDoublet
     import jpype
 
+    initialize_bundled_log4j_silently(jpype)
     report(
         "Java runtime is ready." if jpype.isJVMStarted() else "Java runtime was not started."
     )
@@ -843,10 +975,27 @@ def simulate_dataset(
             mask=field("mask"),
         )
     report("Running the ThermoGIS doublet calculation for every grid cell…")
+    resolved_settings = utc_settings_from_dashboard(settings_values)
     results = ThermoGISDoublet(
-        aquifer, utc_settings_from_dashboard(settings_values)
+        aquifer, resolved_settings
     ).simulate(
         p_values=p_values
     )
     report("Assembling result grids…")
-    return results.to_dataset()
+    result_dataset = results.to_dataset()
+    for variable_name, input_grid in dataset.data_vars.items():
+        result_dataset[f"{SIMULATION_INPUT_PREFIX}{variable_name}"] = input_grid
+    result_dataset.attrs.update(
+        {
+            "pythermogis_dashboard_settings": json.dumps(
+                asdict(resolved_settings), ensure_ascii=False
+            ),
+            "pythermogis_dashboard_field_mapping": json.dumps(
+                mapping, ensure_ascii=False
+            ),
+            "pythermogis_dashboard_percentiles": json.dumps(
+                list(p_values) if p_values is not None else []
+            ),
+        }
+    )
+    return result_dataset

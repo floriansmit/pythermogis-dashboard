@@ -18,7 +18,7 @@ import streamlit as st
 import xarray as xr
 
 APP_DIR = Path(__file__).resolve().parent
-LOGO_PATH = APP_DIR / "GO-Forward.png"
+LOGO_PATH = APP_DIR / "GO-Forward-transparent.png"
 sys.path.insert(0, str(APP_DIR / "src"))
 import workflow as workflow_module
 
@@ -29,12 +29,14 @@ from workflow import (
     INPUT_SUBFOLDERS,
     OUTPUT_SUBFOLDERS,
     ROOT,
+    SIMULATION_INPUT_PREFIX,
     available_netcdf_files,
     convert_grdecl_to_dataset,
     dataset_from_single_grids,
     default_settings,
     detect_grid_sources,
     ensure_project,
+    export_dataset_to_zmaps,
     grdecl_dimensions,
     grdecl_inspection_dataframe,
     grdecl_property_keywords,
@@ -60,24 +62,59 @@ from workflow import (
 
 st.set_page_config(page_title="Pythermogis dashboard", layout="wide")
 
-tab_bar_background = "#000000" if st.context.theme.type == "dark" else "#ffffff"
-st.html(
+tab_bar_background = "#0e1117" if st.context.theme.type == "dark" else "#ffffff"
+st.markdown(
     f"""
     <style>
+    .stTabs [data-baseweb="tab-list"],
     [data-testid="stTabs"] [role="tablist"] {{
-        position: sticky;
-        top: 3.75rem;
-        z-index: 1000;
+        position: sticky !important;
+        top: 3.75rem !important;
+        z-index: 1000 !important;
         background: {tab_bar_background};
-        border-bottom: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+        border-bottom: 1px solid rgba(128,128,128,.30);
+        padding: .2rem 0 0;
+        box-shadow: none;
+    }}
+    .stTabs [data-baseweb="tab"],
+    [data-testid="stTabs"] [role="tab"] {{
+        border: 0 !important;
+        border-radius: 0 !important;
+        outline: 0 !important;
+        box-shadow: inset 0 -3px 0 transparent !important;
+        background: transparent !important;
+    }}
+    .stTabs [data-baseweb="tab"][aria-selected="true"],
+    [data-testid="stTabs"] [role="tab"][aria-selected="true"] {{
+        color: #ff4b4b !important;
+        box-shadow: inset 0 -3px 0 #ff4b4b !important;
+    }}
+    .stTabs [data-baseweb="tab"]:focus-visible,
+    [data-testid="stTabs"] [role="tab"]:focus-visible {{
+        outline: 2px solid #ff4b4b !important;
+        outline-offset: -2px !important;
+    }}
+    .stTabs [data-baseweb="tab-highlight"],
+    [data-testid="stTabs"] [data-baseweb="tab-highlight"] {{
+        display: none !important;
     }}
     </style>
-    """
+    """,
+    unsafe_allow_html=True,
 )
 
 
 DEFAULT_SETTINGS = default_settings()
 THEORY_URL = "https://pythermogis-15909e.ci.tno.nl/theory/introduction/"
+GEOLOGY_SOURCE_LABELS = {
+    "2d_best_fit": "Classic 2D Grids — Deterministic",
+    "2d_probabilistic": "Classic 2D Grids — Probabilistic",
+    "grdecl_best_fit": "Best-fit Model 3D GRDECL → Deterministic 2D Maps",
+    "grdecl_multi": "Multi-Scenario 3D GRDECLs → Probabilistic 2D Maps",
+}
+GEOLOGY_SOURCE_KEYS = {
+    label: source_key for source_key, label in GEOLOGY_SOURCE_LABELS.items()
+}
 
 SETTING_METADATA: dict[str, dict[str, str]] = {
     "optimize_well_distance": {
@@ -216,15 +253,43 @@ SETTING_METADATA: dict[str, dict[str, str]] = {
         "label": "Surface temperature", "unit": "°C",
         "help": "Temperature intercept at zero depth used with the geothermal gradient to calculate reservoir temperature.",
     },
+    "heat_exchanger_efficiency": {
+        "label": "Heat-conversion efficiency η", "unit": "fraction",
+        "help": "Fraction of the available geothermal heat converted to useful output in the selected conversion scenario.",
+    },
+    "heat_exchanger_parasitic": {
+        "label": "Conversion parasitic-power fraction", "unit": "fraction",
+        "help": "Fractional electricity demand of the surface conversion process deducted from useful output.",
+    },
 }
 
-RESULT_METADATA: dict[str, dict[str, str]] = {
-    "power": {"label": "Net geothermal power", "unit": "MW", "calculation": "Converted geothermal output after applying the conversion scenario and parasitic losses. The basic energy relation is E = η·Q·C·ΔT."},
+RESULT_METADATA: dict[str, dict[str, object]] = {
+    "power": {
+        "label": "Net geothermal power", "unit": "MW",
+        "calculation": (
+            "Useful geothermal output after the selected conversion process and parasitic "
+            "electricity demand. ThermoGIS obtains flow and surface temperatures from the "
+            "coupled reservoir, wellbore-pressure, and heat-loss calculation."
+        ),
+        "formula": "P_net = η · q_m · c_p · (T_prod − T_inj) / 10⁶ − P_parasitic",
+        "terms": [
+            "P_net: net useful geothermal power [MW].",
+            "η: heat-conversion or heat-exchanger efficiency [dimensionless fraction].",
+            "q_m: geothermal-brine mass-flow rate [kg/s]. The displayed flow_rate result is volumetric flow [m³/h]; ThermoGIS converts it using calculated brine density [kg/m³].",
+            "c_p: temperature- and salinity-dependent brine specific heat capacity [J/(kg·K)].",
+            "T_prod: production temperature at the surface [°C].",
+            "T_inj: injection/return temperature at the surface [°C]. A temperature difference in °C equals the same difference in K.",
+            "P_parasitic: conversion-process and pumping electricity deducted from useful output [MW].",
+            "10⁶: converts watts (J/s) to megawatts.",
+        ],
+        "result_inputs": ["flow_rate", "prd_temp", "inj_temp"],
+        "setting_inputs": ["heat_exchanger_efficiency", "heat_exchanger_parasitic", "pump_efficiency"],
+    },
     "heat_pump_power": {"label": "Heat output including heat pump", "unit": "MW", "calculation": "Total useful heat including the heat-pump contribution when that conversion option is active."},
-    "capex": {"label": "Total capital expenditure", "unit": "million €", "calculation": "Sum of doublet well cost, optional stimulation cost, and fixed plus capacity-dependent plant CAPEX, including configured contingency."},
-    "opex": {"label": "First-year operating expenditure", "unit": "million €/year", "calculation": "Fixed, capacity-dependent, energy-dependent, CAPEX-related, and purchased-electricity operating costs for the first operating year."},
-    "utc": {"label": "Unit Technical Cost / LCOE", "unit": "€ct/kWh", "calculation": "Ratio of total discounted cost to discounted tax-adjusted energy produced over the economic lifetime."},
-    "npv": {"label": "Net present value", "unit": "million €", "calculation": "Calculated relative to the commercial UTC cutoff from discounted tax-adjusted heat production and the margin (UTC cutoff − UTC)."},
+    "capex": {"label": "Total capital expenditure", "unit": "million €", "calculation": "Sum of doublet well cost, optional stimulation cost, and fixed plus capacity-dependent plant CAPEX, including configured contingency.", "formula": "CAPEX_plant = CAPEX_base + CAPEX_variable · P_net", "terms": ["CAPEX_base: fixed plant cost [million €].", "CAPEX_variable: capacity-dependent plant cost [€/kW].", "P_net: net installed geothermal capacity [MW], converted to kW in the calculation."], "result_inputs": ["power"], "setting_inputs": ["capex_constant", "capex_variable", "capex_contingency", "well_cost_constant", "well_cost_depth", "well_cost_depth2", "well_cost_scaling"]},
+    "opex": {"label": "First-year operating expenditure", "unit": "million €/year", "calculation": "Fixed, capacity-dependent, energy-dependent, CAPEX-related, and purchased-electricity operating costs for the first operating year.", "formula": "OPEX = OPEX_base + OPEX_power · P_net + OPEX_energy · E_year + OPEX_CAPEX + electricity cost", "terms": ["OPEX_base: fixed annual operating cost [million €/year].", "OPEX_power: annual cost per installed capacity [€/(kW·year)].", "P_net: net installed geothermal capacity [MW].", "OPEX_energy: variable cost per produced energy [€/kWh].", "E_year: geothermal energy produced in the first year [MWh/year].", "Electricity cost covers ESP, conversion-process, and heat-pump electricity [€/year]."], "result_inputs": ["power", "hprod"], "setting_inputs": ["opex_base", "opex_power", "opex_energy", "opex_per_capex", "electricity_purchase_price", "load_hours"]},
+    "utc": {"label": "Unit Technical Cost / LCOE", "unit": "€ct/kWh", "calculation": "Ratio of total discounted project cost to discounted tax-adjusted geothermal energy produced over the economic lifetime.", "formula": "UTC = discounted lifetime costs / discounted tax-adjusted geothermal energy", "terms": ["Discounted lifetime costs: CAPEX, financing, and discounted annual OPEX [€].", "Discounted tax-adjusted geothermal energy: lifetime heat production after tax and discounting [kWh].", "The result is converted from €/kWh to euro cents per kWh."], "result_inputs": ["capex", "opex", "hprod"], "setting_inputs": ["economic_lifetime", "tax_rate", "interest_loan", "inflation", "equity_return", "debt_equity"]},
+    "npv": {"label": "Net present value", "unit": "million €", "calculation": "Value relative to the configured commercial UTC cutoff, using discounted heat production and the margin between that cutoff and the calculated UTC.", "formula": "NPV [million €] = 10⁻⁶ · 3.6 · H_prod · (1 − tax) · (UTC_cutoff − UTC)", "terms": ["H_prod: discounted geothermal heat production returned by ThermoGIS [MWh].", "tax: configured tax rate [fraction; the dashboard setting is entered as %].", "UTC_cutoff: commercial/reference heat price [€ct/kWh].", "UTC: calculated unit technical cost [€ct/kWh].", "The factors 3.6 and 10⁻⁶ reconcile the ThermoGIS energy/currency units and express the result in million €."], "result_inputs": ["hprod", "utc"], "setting_inputs": ["tax_rate", "utc_cutoff"]},
     "hprod": {"label": "Heat-production KPI", "unit": "API: TJ/year; theory KPI table: discounted MWh", "calculation": "Heat production derived from geothermal power and annual load hours. The public result-class documentation calls this annual heat production in TJ/year, while the theory KPI page describes Hprod as lifetime-discounted MWh; this viewer exposes that documentation inconsistency rather than silently choosing one interpretation."},
     "cop": {"label": "System coefficient of performance", "unit": "dimensionless", "calculation": "Ratio of useful geothermal output to consumed pumping/conversion electricity."},
     "cophp": {"label": "Heat-pump coefficient of performance", "unit": "dimensionless", "calculation": "Useful heat delivered by the heat pump divided by heat-pump electricity consumption."},
@@ -233,7 +298,7 @@ RESULT_METADATA: dict[str, dict[str, str]] = {
     "welld": {"label": "Producer–injector distance", "unit": "m", "calculation": "Optimized reservoir-level spacing, or the fixed configured spacing when optimization is disabled. Optimization limits thermal breakthrough over the technical lifetime."},
     "inj_temp": {"label": "Injection temperature", "unit": "°C", "calculation": "Temperature of the cooled fluid returned to the injection well after surface energy conversion."},
     "prd_temp": {"label": "Surface production temperature", "unit": "°C", "calculation": "Produced-fluid temperature at surface after heat loss along the production well."},
-    "transmissivity_with_ntg": {"label": "Net transmissivity", "unit": "D·m", "calculation": "Gross permeability × thickness, corrected by net-to-gross and converted from mD·m to D·m."},
+    "transmissivity_with_ntg": {"label": "Net transmissivity", "unit": "D·m", "calculation": "Gross permeability × thickness, corrected by net-to-gross and converted from mD·m to D·m.", "formula": "kh_net = permeability · thickness · NTG / 1000", "terms": ["permeability: reservoir permeability [mD].", "thickness: gross reservoir thickness [m].", "NTG: net-to-gross [dimensionless fraction].", "1000 converts mD·m to D·m."], "result_inputs": ["permeability", "thickness"]},
     "thickness": {"label": "Reservoir thickness used", "unit": "m", "calculation": "Gross reservoir thickness supplied to the simulation; probabilistic runs contain the sampled percentile value."},
     "transmissivity": {"label": "Gross transmissivity", "unit": "mD·m", "calculation": "Permeability × gross reservoir thickness before net-to-gross correction."},
     "permeability": {"label": "Reservoir permeability used", "unit": "mD", "calculation": "Permeability supplied or sampled for the doublet calculation."},
@@ -631,9 +696,18 @@ def interactive_curvilinear_figure(
 
 
 def show_result_map(dataset: xr.Dataset, boundary) -> None:
+    def result_label(name: str) -> str:
+        return RESULT_METADATA.get(name, {}).get(
+            "label", name.replace("_", " ").title()
+        )
+
+    result_variables = [
+        name for name in dataset.data_vars
+        if not name.startswith(SIMULATION_INPUT_PREFIX)
+    ]
     variable = st.selectbox(
-        "Result variable to inspect", list(dataset.data_vars), key="result_grid_variable",
-        format_func=lambda name: RESULT_METADATA.get(name, {}).get("label", name.replace("_", " ").title()),
+        "Result variable to inspect", result_variables, key="result_grid_variable",
+        format_func=result_label,
     )
     result_column, dataset_column = st.columns([7, 3], gap="large")
     with result_column:
@@ -643,6 +717,7 @@ def show_result_map(dataset: xr.Dataset, boundary) -> None:
             key_prefix="result_grid",
             title="Result map and statistics",
             variable=variable,
+            display_label=result_label(variable),
             compact=True,
             interactive=True,
         )
@@ -653,6 +728,80 @@ def show_result_map(dataset: xr.Dataset, boundary) -> None:
             st.markdown(f"**{metadata['label']}**")
             st.caption(f"NetCDF variable: `{variable}` · Unit: **{metadata['unit']}**")
             st.write(metadata["calculation"])
+            formula = metadata.get("formula")
+            if formula:
+                st.markdown("**Formula and symbols**")
+                st.code(str(formula), language=None)
+                for term in metadata.get("terms", []):
+                    st.markdown(f"- {term}")
+
+            result_inputs = metadata.get("result_inputs", [])
+            setting_inputs = metadata.get("setting_inputs", [])
+            if result_inputs or setting_inputs:
+                with st.expander("Values used in this result", expanded=True):
+                    rows: list[dict[str, str]] = []
+                    percentile_index = int(
+                        st.session_state.get(f"result_grid_{variable}_p_value", 0)
+                    )
+                    for input_name in result_inputs:
+                        if input_name not in dataset:
+                            continue
+                        input_grid = dataset[input_name]
+                        percentile = None
+                        if "p_value" in input_grid.dims:
+                            percentile_index = min(
+                                percentile_index, input_grid.sizes["p_value"] - 1
+                            )
+                            percentile = float(input_grid.coords["p_value"].values[percentile_index])
+                            input_grid = input_grid.isel(p_value=percentile_index)
+                        values = np.asarray(input_grid.values, dtype=float)
+                        finite = values[np.isfinite(values)]
+                        if not finite.size:
+                            continue
+                        input_metadata = RESULT_METADATA.get(input_name, {})
+                        quantity = str(input_metadata.get("label", input_name.replace("_", " ").title()))
+                        if percentile is not None:
+                            quantity = f"{quantity} (P{percentile:g})"
+                        rows.append(
+                            {
+                                "Input": quantity,
+                                "Value used across active cells": (
+                                    f"min {np.min(finite):.4g} · mean {np.mean(finite):.4g} · "
+                                    f"max {np.max(finite):.4g}"
+                                ),
+                                "Unit": str(input_metadata.get("unit", input_grid.attrs.get("units", "—"))),
+                            }
+                        )
+
+                    saved_settings: dict[str, object] = {}
+                    raw_settings = dataset.attrs.get("pythermogis_dashboard_settings")
+                    if raw_settings:
+                        try:
+                            saved_settings = json.loads(str(raw_settings))
+                        except (TypeError, ValueError, json.JSONDecodeError):
+                            saved_settings = {}
+                    for setting_name in setting_inputs:
+                        if setting_name not in saved_settings:
+                            continue
+                        setting_metadata = SETTING_METADATA.get(setting_name, {})
+                        rows.append(
+                            {
+                                "Input": str(setting_metadata.get("label", setting_name.replace("_", " ").title())),
+                                "Value used across active cells": str(saved_settings[setting_name]),
+                                "Unit": str(setting_metadata.get("unit", "dimensionless")),
+                            }
+                        )
+                    if rows:
+                        st.dataframe(rows, hide_index=True, width="stretch")
+                        st.caption(
+                            "Spatial inputs are summarized for the selected percentile. "
+                            "Open the maps to inspect individual cells."
+                        )
+                    if setting_inputs and not raw_settings:
+                        st.info(
+                            "This result predates saved dashboard provenance, so its configured "
+                            "model-setting values are unavailable. Newly generated results store them."
+                        )
         else:
             unit = dataset[variable].attrs.get("units", "not documented in the dataset")
             long_name = dataset[variable].attrs.get("long_name", variable.replace("_", " ").title())
@@ -666,7 +815,7 @@ def show_result_map(dataset: xr.Dataset, boundary) -> None:
         )
         st.markdown(f"[Read the underlying calculation theory]({THEORY_URL})")
         st.divider()
-        st.metric("Result variables", len(dataset.data_vars))
+        st.metric("Result variables", len(result_variables))
         st.caption(f"Dataset dimensions: {dict(dataset.sizes)}")
 
 
@@ -677,6 +826,7 @@ def show_grid_viewer(
     *,
     title: str = "2D grid viewer and histogram",
     variable: str | None = None,
+    display_label: str | None = None,
     compact: bool = False,
     show_histogram: bool = True,
     interactive: bool = False,
@@ -691,19 +841,37 @@ def show_grid_viewer(
     else:
         st.caption(f"Grid: `{variable}`")
     grid = dataset[variable]
+    map_title = display_label or variable
 
     # A realization, percentile, or time dimension is normally the leading
     # dimension.  Slice every non-spatial dimension until a map can be shown.
     spatial_dims = {"x", "y", "longitude", "latitude", "lon", "lat"}
     for dim in list(grid.dims):
         if dim not in spatial_dims and grid.ndim > 2:
-            index = st.slider(
-                f"{dim} index",
-                min_value=0,
-                max_value=grid.sizes[dim] - 1,
-                value=0,
-                key=f"{key_prefix}_{variable}_{dim}",
-            )
+            if dim == "p_value" and dim in grid.coords:
+                percentile_values = np.asarray(grid.coords[dim].values).reshape(-1)
+
+                def percentile_label(index: int) -> str:
+                    value = float(percentile_values[index])
+                    formatted = f"{value:g}"
+                    return f"P{formatted}"
+
+                index = st.select_slider(
+                    "Percentile to display",
+                    options=list(range(grid.sizes[dim])),
+                    value=0,
+                    format_func=percentile_label,
+                    key=f"{key_prefix}_{variable}_{dim}",
+                )
+                map_title = f"{map_title} — {percentile_label(index)}"
+            else:
+                index = st.slider(
+                    f"{dim} index",
+                    min_value=0,
+                    max_value=grid.sizes[dim] - 1,
+                    value=0,
+                    key=f"{key_prefix}_{variable}_{dim}",
+                )
             grid = grid.isel({dim: index})
 
     def render_map() -> None:
@@ -711,7 +879,7 @@ def show_grid_viewer(
         curvilinear = grid.ndim == 2 and has_curvilinear_map_coordinates(grid)
         if interactive and curvilinear:
             figure = interactive_curvilinear_figure(grid, variable, boundary)
-            figure.update_layout(height=interactive_height)
+            figure.update_layout(height=interactive_height, title=map_title)
             st.caption(
                 "Hover over a quadrilateral cell to read its value. Scroll to zoom; drag to pan. "
                 "The map scale is locked equally in X and Y, and the original rotated cells are "
@@ -782,7 +950,7 @@ def show_grid_viewer(
                 except Exception as exc:
                     st.warning(f"Boundary could not be overlaid: {exc}")
             figure.update_layout(
-                title=variable,
+                title=map_title,
                 height=interactive_height,
                 margin={"l": 20, "r": 20, "t": 45, "b": 20},
                 dragmode="zoom",
@@ -840,7 +1008,7 @@ def show_grid_viewer(
         else:
             ax.text(0.5, 0.5, f"Scalar value: {grid.item():g}", ha="center", va="center")
             ax.set_axis_off()
-        ax.set_title(variable)
+        ax.set_title(map_title)
         if grid.ndim == 2:
             ax.set_aspect("equal", adjustable="box")
             ax.tick_params(labelsize=5)
@@ -1293,7 +1461,7 @@ def _plot_grdecl_scatter(df: pd.DataFrame, property_name: str, payload: dict, *,
             )
         )
         fig.update_layout(height=460, margin=dict(l=10, r=10, t=35, b=10), scene={"aspectmode": "data"})
-        st.plotly_chart(fig, use_container_width=True, key=key)
+        st.plotly_chart(fig, width="stretch", key=key)
         return
 
     if discrete:
@@ -1345,7 +1513,7 @@ def _plot_grdecl_scatter(df: pd.DataFrame, property_name: str, payload: dict, *,
         fig.update_yaxes(scaleanchor="x", scaleratio=1)
     else:
         fig.update_yaxes(autorange="reversed", title="Z")
-    st.plotly_chart(fig, use_container_width=True, key=key)
+    st.plotly_chart(fig, width="stretch", key=key)
 
 
 def grdecl_inspection_panel(grdecls: list[Path], facies_payload: dict, *, key_prefix: str) -> None:
@@ -1419,7 +1587,7 @@ def grdecl_inspection_panel(grdecls: list[Path], facies_payload: dict, *, key_pr
         plot_df = df[df["J"] == selected_j]
 
     if view == "Data table":
-        st.dataframe(df.head(2_000), use_container_width=True)
+        st.dataframe(df.head(2_000), width="stretch")
     elif plot_df.empty:
         st.warning("No sampled cells in this slice. Increase the viewer sample limit or choose another slice.")
     else:
@@ -1447,6 +1615,82 @@ def close_open_results() -> None:
     st.session_state.results = None
     st.session_state.current_result_path = None
     st.session_state.loaded_result_upload_signature = None
+
+
+def restore_simulation_state_from_result(result: xr.Dataset, project_name: str) -> str:
+    """Restore dashboard inputs and settings embedded in a result dataset."""
+    restored: list[str] = []
+    unavailable: list[str] = []
+
+    embedded_variables = [
+        name for name in result.data_vars
+        if name.startswith(SIMULATION_INPUT_PREFIX)
+    ]
+    if embedded_variables:
+        rename = {
+            name: name.removeprefix(SIMULATION_INPUT_PREFIX)
+            for name in embedded_variables
+        }
+        restored_dataset = result[embedded_variables].rename(rename).copy(deep=True)
+        st.session_state.dataset = restored_dataset
+        st.session_state.raw_selected_dataset = restored_dataset.copy(deep=True)
+        st.session_state.restored_result_dataset = restored_dataset.copy(deep=True)
+        st.session_state.use_restored_result_inputs = True
+        restored.append(f"validated geology ({len(restored_dataset.data_vars)} grids)")
+    else:
+        unavailable.append("validated geology grids")
+
+    raw_mapping = result.attrs.get("pythermogis_dashboard_field_mapping")
+    try:
+        saved_mapping = json.loads(str(raw_mapping)) if raw_mapping else {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        saved_mapping = {}
+    if saved_mapping:
+        available = set(st.session_state.dataset.data_vars) if st.session_state.dataset is not None else set()
+        st.session_state.mapping = {
+            field: variable
+            for field, variable in saved_mapping.items()
+            if variable in available
+        }
+        stochastic = bool(st.session_state.mapping.get("thickness_mean"))
+        st.session_state.run_type = "stochastic" if stochastic else "deterministic"
+        restored.append("geology field mapping")
+    else:
+        unavailable.append("geology field mapping")
+
+    raw_settings = result.attrs.get("pythermogis_dashboard_settings")
+    try:
+        saved_settings = json.loads(str(raw_settings)) if raw_settings else {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        saved_settings = {}
+    exposed_settings = {
+        name: saved_settings[name]
+        for name in DEFAULT_SETTINGS
+        if name in saved_settings
+    }
+    if exposed_settings:
+        st.session_state.settings.update(exposed_settings)
+        for name, value in exposed_settings.items():
+            st.session_state[f"setting_draft_{name}"] = value
+        restored.append(f"well, cost, economic, and temperature settings ({len(exposed_settings)} values)")
+    else:
+        unavailable.append("model settings")
+
+    source_key = str(result.attrs.get("pythermogis_dashboard_source_folder_key", ""))
+    if source_key in GEOLOGY_SOURCE_LABELS:
+        source_label = GEOLOGY_SOURCE_LABELS[source_key]
+        st.session_state.active_source_folder_key = source_key
+        st.session_state.geology_source_selector = source_label
+        st.session_state.geology_source_state_key = f"{project_name}|{source_label}"
+        restored.append("geology-source mode")
+    else:
+        unavailable.append("geology-source mode")
+
+    message = "Restored " + ", ".join(restored) + "." if restored else "No restorable setup was found."
+    if unavailable:
+        message += " Unavailable in this result: " + ", ".join(unavailable) + "."
+    message += " Boundary shapefiles are external files and are not embedded in the NetCDF."
+    return message
 
 
 def clear_loaded_project_data() -> None:
@@ -1631,7 +1875,7 @@ def show_location_analysis(results: xr.Dataset, boundary) -> None:
         preview = pos.isel(x=slice(None, None, stride_x), y=slice(None, None, stride_y))
         click = st.plotly_chart(
             go.Figure(go.Heatmap(x=preview.x.values, y=preview.y.values, z=preview.values, colorscale="Viridis", colorbar={"title": "POS [%]"})),
-            use_container_width=True, on_select="rerun", selection_mode="points", key="pos_location_picker",
+            width="stretch", on_select="rerun", selection_mode="points", key="pos_location_picker",
         )
         selection = getattr(click, "selection", click.get("selection", {}) if isinstance(click, dict) else {})
         points = getattr(selection, "points", selection.get("points", []) if isinstance(selection, dict) else [])
@@ -1700,15 +1944,13 @@ def show_location_analysis(results: xr.Dataset, boundary) -> None:
     st.pyplot(fig, clear_figure=True)
 
 
-header, logo = st.columns([5, 1])
-with header:
-    st.title("Pythermogis dashboard")
-    st.caption("Project-based Pythermogis workflow for 2D grids and GRDECL-derived maps.")
-with logo:
-    if LOGO_PATH.exists():
-        st.image(LOGO_PATH, use_container_width=True)
+st.title("Pythermogis dashboard")
+st.caption("Project-based Pythermogis workflow for 2D grids and GRDECL-derived maps.")
 
 with st.sidebar:
+    if LOGO_PATH.exists():
+        st.image(LOGO_PATH, width="stretch")
+        st.divider()
     active_project = project_sidebar()
     st.divider()
     st.write("Workspace layout")
@@ -1726,28 +1968,55 @@ boundary = state("boundary", lambda: None)
 mapping = state("mapping", dict)
 results = state("results", lambda: None)
 
+if st.session_state.pop("restore_open_result_setup", False) and results is not None:
+    st.session_state.result_setup_restore_notice = restore_simulation_state_from_result(
+        results, active_project
+    )
+
 tabs = st.tabs([
-    "Geology input", "Well design", "Cost model", "Economic model",
-    "Geothermal simulation", "Geothermal results",
+    "Geology", "Well design", "Costs", "Economics", "Simulation", "Results",
 ])
 
 with tabs[0]:
     st.subheader("Geology input")
-    geology_source = st.radio(
-        "Geology source",
-        [
-            "Current 2D grids — deterministic",
-            "Current 2D grids — probabilistic",
-            "Single GRDECL → deterministic 2D maps",
-            "Multiple GRDECLs → probabilistic statistics",
-        ],
-    )
-    source_folder_key = {
-        "Current 2D grids — deterministic": "2d_best_fit",
-        "Current 2D grids — probabilistic": "2d_probabilistic",
-        "Single GRDECL → deterministic 2D maps": "grdecl_best_fit",
-        "Multiple GRDECLs → probabilistic statistics": "grdecl_multi",
-    }[geology_source]
+    selected_source_key = st.session_state.get("active_source_folder_key", "2d_best_fit")
+    if st.session_state.get("geology_source_selector") not in GEOLOGY_SOURCE_KEYS:
+        st.session_state.geology_source_selector = GEOLOGY_SOURCE_LABELS.get(
+            selected_source_key, GEOLOGY_SOURCE_LABELS["2d_best_fit"]
+        )
+    st.markdown("**Geology source**")
+    classic_column, grdecl_column = st.columns(2, gap="large")
+    source_groups = [
+        (
+            classic_column,
+            "Classic 2D grids",
+            "Use existing depth, thickness, porosity, NTG, and permeability maps.",
+            ["2d_best_fit", "2d_probabilistic"],
+        ),
+        (
+            grdecl_column,
+            "3D GRDECL-derived maps",
+            "Generate the required 2D property maps from one or more 3D models.",
+            ["grdecl_best_fit", "grdecl_multi"],
+        ),
+    ]
+    for column, group_title, group_description, source_keys in source_groups:
+        with column.container(border=True):
+            st.markdown(f"**{group_title}**")
+            st.caption(group_description)
+            for source_key in source_keys:
+                source_label = GEOLOGY_SOURCE_LABELS[source_key]
+                selected = st.session_state.geology_source_selector == source_label
+                if st.button(
+                    source_label,
+                    key=f"select_geology_source_{source_key}",
+                    type="primary" if selected else "secondary",
+                    width="stretch",
+                ) and not selected:
+                    st.session_state.geology_source_selector = source_label
+                    st.rerun()
+    geology_source = st.session_state.geology_source_selector
+    source_folder_key = GEOLOGY_SOURCE_KEYS[geology_source]
     st.session_state.active_source_folder_key = source_folder_key
     source_state_key = f"{active_project}|{geology_source}"
     if st.session_state.get("geology_source_state_key") != source_state_key:
@@ -1755,11 +2024,26 @@ with tabs[0]:
         st.session_state.raw_selected_dataset = None
         st.session_state.dataset = None
         st.session_state.mapping = {}
+        st.session_state.use_restored_result_inputs = False
+        st.session_state.restored_result_dataset = None
     stochastic = geology_source in {
-        "Current 2D grids — probabilistic",
-        "Multiple GRDECLs → probabilistic statistics",
+        GEOLOGY_SOURCE_LABELS["2d_probabilistic"],
+        GEOLOGY_SOURCE_LABELS["grdecl_multi"],
     }
     st.info("Choose the geology source first. The dashboard then uses the matching typed project input folder.")
+    if st.session_state.get("use_restored_result_inputs"):
+        restored_grid_count = len(st.session_state.restored_result_dataset.data_vars)
+        restored_columns = st.columns([4, 1], vertical_alignment="center")
+        restored_columns[0].success(
+            f"Using {restored_grid_count} validated geology grids restored from the open result."
+        )
+        if restored_columns[1].button("Return to project inputs", width="stretch"):
+            st.session_state.use_restored_result_inputs = False
+            st.session_state.restored_result_dataset = None
+            st.session_state.raw_selected_dataset = None
+            st.session_state.dataset = None
+            st.session_state.mapping = {}
+            st.rerun()
     if "GRDECL" in geology_source:
         available_input_files = typed_project_file_importer(
             active_project,
@@ -2051,7 +2335,7 @@ with tabs[0]:
             st.dataframe(
                 detected_rows,
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
             st.caption(
                 "Statistics use valid numeric cells and exclude common undefined sentinels. "
@@ -2280,6 +2564,11 @@ with tabs[0]:
                 "enable the viewer and simulation. Missing: " + ", ".join(missing_required)
             )
 
+    if (
+        st.session_state.get("use_restored_result_inputs")
+        and st.session_state.get("restored_result_dataset") is not None
+    ):
+        st.session_state.raw_selected_dataset = st.session_state.restored_result_dataset
     selected = st.session_state.get("raw_selected_dataset")
     if selected is not None:
         geometry = grid_geometry(selected)
@@ -2478,10 +2767,12 @@ with tabs[4]:
                 st.metric("Validated cell size", f"{validated_geometry['dx']:,.0f} × {validated_geometry['dy']:,.0f} m")
             st.metric("Validated grid cells", f"{validated_geometry['cell_count']:,}")
             st.caption(f"Variables: {', '.join(st.session_state.dataset.data_vars)}")
+            run_controls_slot = st.container()
             run_button_slot = st.empty()
             run_progress_slot = st.empty()
     else:
         st.info("No validated simulation grid is currently available. Validate one in the Geology input tab.")
+        run_controls_slot = st.container()
         run_button_slot = st.empty()
         run_progress_slot = st.empty()
     st.divider()
@@ -2491,15 +2782,16 @@ with tabs[4]:
     if stochastic_run:
         required = ["thickness_mean", "thickness_sd", "ln_permeability_mean", "ln_permeability_sd", "porosity", "ntg", "depth"]
         inputs_ready = st.session_state.dataset is not None and all(st.session_state.mapping.get(name) for name in required)
-        if not inputs_ready:
-            st.warning("Load and validate depth, thickness mean/SD, log-permeability mean/SD, porosity, and net-to-gross before running.")
-        p_values = st.multiselect(
-            "Requested percentiles", [1.0, 5.0, 10.0, 25.0, 50.0, 75.0, 90.0, 95.0, 99.0],
-            default=[10.0, 50.0, 90.0],
-        )
-        st.caption("Percentiles are passed as 0–100 values, e.g. 10, 50, and 90.")
-        detailed_progress = st.checkbox("Show detailed cell progress", value=True, key="stochastic_progress")
-        rows_per_chunk = st.slider("Rows per progress update", 1, 50, 5, disabled=not detailed_progress, key="stochastic_chunk_rows")
+        with run_controls_slot:
+            if not inputs_ready:
+                st.warning("Load and validate depth, thickness mean/SD, log-permeability mean/SD, porosity, and net-to-gross before running.")
+            p_values = st.multiselect(
+                "Requested percentiles", [1.0, 5.0, 10.0, 25.0, 50.0, 75.0, 90.0, 95.0, 99.0],
+                default=[10.0, 50.0, 90.0],
+            )
+            st.caption("Percentiles are passed as 0–100 values, e.g. 10, 50, and 90.")
+            detailed_progress = st.checkbox("Show detailed cell progress", value=True, key="stochastic_progress")
+            rows_per_chunk = st.slider("Rows per progress update", 1, 50, 5, disabled=not detailed_progress, key="stochastic_chunk_rows")
         run_clicked = run_button_slot.button(
             "Run probabilistic Pythermogis simulation and save", type="primary",
             disabled=not (inputs_ready and filename_ready and bool(p_values)), width="stretch",
@@ -2517,6 +2809,8 @@ with tabs[4]:
                         cell_progress=update_cells if detailed_progress else None,
                         rows_per_chunk=rows_per_chunk,
                     )
+                    st.session_state.results.attrs["pythermogis_dashboard_source_folder_key"] = active_output_key
+                    st.session_state.results.attrs["pythermogis_dashboard_project"] = active_project
                     progress.write(f"Saving NetCDF result to {output_path}")
                     st.session_state.results.to_netcdf(output_path, mode="w")
                     st.session_state.current_result_path = output_path
@@ -2550,6 +2844,8 @@ with tabs[4]:
                             st.session_state.dataset, st.session_state.mapping, settings,
                             status=progress.write, cell_progress=update_cells, rows_per_chunk=5,
                         )
+                    st.session_state.results.attrs["pythermogis_dashboard_source_folder_key"] = active_output_key
+                    st.session_state.results.attrs["pythermogis_dashboard_project"] = active_project
                     progress.write(f"Saving NetCDF result to {output_path}")
                     st.session_state.results.to_netcdf(output_path, mode="w")
                     st.session_state.current_result_path = output_path
@@ -2561,6 +2857,9 @@ with tabs[4]:
 
 with tabs[5]:
     st.subheader("Geothermal results")
+    setup_restore_notice = st.session_state.pop("result_setup_restore_notice", None)
+    if setup_restore_notice:
+        st.success(setup_restore_notice)
     result_removal_notice = st.session_state.pop("result_removal_notice", None)
     if result_removal_notice:
         st.success(result_removal_notice)
@@ -2574,7 +2873,9 @@ with tabs[5]:
         if path.suffix.lower() in {".nc", ".netcdf"}
     ]
     st.caption(f"Active output folder: `{active_output_folder}`")
-    result_selector, result_action, result_remove = st.columns([4, 1, 1], vertical_alignment="bottom")
+    result_selector, result_action, result_remove, result_export = st.columns(
+        [3.4, 1, 1, 1.25], vertical_alignment="bottom"
+    )
     selected_result = result_selector.selectbox(
         "Open project result", ["—"] + existing_results,
         format_func=lambda path: "—" if path == "—" else path.name,
@@ -2595,6 +2896,45 @@ with tabs[5]:
         width="stretch",
     ):
         confirm_remove_result(active_project, active_output_subfolder, selected_result)
+    if result_export.button(
+        "Export ZMAP grids",
+        disabled=selected_result == "—",
+        width="stretch",
+        help=(
+            "Export all rectilinear result maps and, when embedded in the NetCDF, the validated "
+            "input grids. Probabilistic variables are written as separate P-value grids."
+        ),
+    ):
+        try:
+            with st.spinner("Writing result and input ZMAP grids…"):
+                export_source = load_dataset(selected_result)
+                export_directory = selected_result.parent / f"{selected_result.stem}_Zmap"
+                export_report = export_dataset_to_zmaps(
+                    export_source,
+                    export_directory,
+                    unit_lookup={
+                        name: str(metadata.get("unit", ""))
+                        for name, metadata in RESULT_METADATA.items()
+                    },
+                )
+            st.success(
+                f"Exported {export_report['result_count']} result ZMAP grids and "
+                f"{export_report['input_count']} validated input ZMAP grids to "
+                f"`{export_report['output_dir']}`."
+            )
+            if not export_report["input_count"]:
+                st.info(
+                    "This result does not contain embedded validated inputs, so only result maps "
+                    "were exported. Results generated by the current dashboard include inputs."
+                )
+            if export_report["skipped"]:
+                with st.expander(
+                    f"Skipped {len(export_report['skipped'])} non-exportable variable(s)"
+                ):
+                    for reason in export_report["skipped"]:
+                        st.write(f"- {reason}")
+        except Exception as exc:
+            st.error(f"Could not export the selected result to ZMAP: {exc}")
 
     result_file = st.file_uploader(
         "Or open an external NetCDF results file", type=["nc", "netcdf"], key="results_file",
@@ -2620,9 +2960,39 @@ with tabs[5]:
         if current_path:
             st.success(f"Open result: `{current_path}`")
         download_name = Path(current_path).name if current_path else "pythermogis_results.nc"
-        st.download_button(
-            "Download open result as NetCDF", st.session_state.results.to_netcdf(),
-            download_name, "application/x-netcdf",
+        embedded_input_count = sum(
+            name.startswith(SIMULATION_INPUT_PREFIX)
+            for name in st.session_state.results.data_vars
         )
+        has_saved_settings = bool(
+            st.session_state.results.attrs.get("pythermogis_dashboard_settings")
+        )
+        download_column, restore_column = st.columns(2)
+        download_column.download_button(
+            "Download open result as NetCDF", st.session_state.results.to_netcdf(),
+            download_name, "application/x-netcdf", width="stretch",
+        )
+        restore_clicked = restore_column.button(
+            "Restore simulation setup from this result",
+            disabled=not (embedded_input_count or has_saved_settings),
+            width="stretch",
+            help=(
+                "Restore the validated geology, field mapping, geology-source mode, and the "
+                "applied Well design, Cost model, Economic model, and temperature settings."
+            ),
+        )
+        if restore_clicked:
+            st.session_state.restore_open_result_setup = True
+            st.rerun()
+        if embedded_input_count or has_saved_settings:
+            st.caption(
+                f"Saved provenance: {embedded_input_count} validated geology grids; "
+                f"model settings {'available' if has_saved_settings else 'not available'}."
+            )
+        else:
+            st.info(
+                "This older result does not contain restorable dashboard provenance. "
+                "New simulations embed their validated inputs and settings automatically."
+            )
         show_result_map(st.session_state.results, st.session_state.boundary)
         show_location_analysis(st.session_state.results, st.session_state.boundary)

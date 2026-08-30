@@ -26,6 +26,26 @@ data/**
 *.cpg
 *.zip
 
+# Curated, compact demo assets that are intentionally versioned.
+!data/demo-project/
+!data/demo-project/input_data/
+!data/demo-project/input_data/2d_grid_best_fit/
+!data/demo-project/input_data/2d_grid_best_fit/*.zmap
+!data/demo-project/input_data/2d_grid_probabilistic/
+!data/demo-project/input_data/2d_grid_probabilistic/*.zmap
+!data/demo-project/input_data/boundaries/
+!data/demo-project/input_data/boundaries/denmark_coastline.cpg
+!data/demo-project/input_data/boundaries/denmark_coastline.dbf
+!data/demo-project/input_data/boundaries/denmark_coastline.prj
+!data/demo-project/input_data/boundaries/denmark_coastline.shp
+!data/demo-project/input_data/boundaries/denmark_coastline.shx
+!data/demo-project/input_data/3d_grdecl_best_fit/
+!data/demo-project/input_data/3d_grdecl_best_fit/facies_config.json
+!data/demo-project/input_data/3d_grdecl_best_fit/gassum_minimal_facies_poro50_perm50.grdecl
+!data/demo-project/input_data/3d_grdecl_multi_realization/
+!data/demo-project/input_data/3d_grdecl_multi_realization/facies_config.json
+!data/demo-project/input_data/3d_grdecl_multi_realization/gassum_*.grdecl
+
 # Local secrets.
 .env
 .streamlit/secrets.toml
