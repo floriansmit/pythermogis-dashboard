@@ -2224,6 +2224,12 @@ with st.sidebar:
         "data/<project>/input_data/<geology-type>/\n"
         "data/<project>/output_data/<geology-type>/"
     )
+    st.divider()
+    st.caption(
+        "[Source code](https://github.com/floriansmit/pythermogis-dashboard) · "
+        "[MIT license](https://github.com/floriansmit/pythermogis-dashboard/blob/main/LICENSE)  \n"
+        "Provided without warranty. Copyright and license notices must be retained."
+    )
 
 workflow = "Pythermogis"
 
