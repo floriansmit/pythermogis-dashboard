@@ -3,6 +3,8 @@ name = "pythermogis-dashboard"
 version = "0.1.0"
 description = "Project-based Streamlit dashboard for Pythermogis workflows"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "dask>=2025.5.1,<2026",

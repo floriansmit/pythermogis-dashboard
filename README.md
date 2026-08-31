@@ -14,6 +14,20 @@ simulations, and inspecting spatial and location-specific results.
 > [Pythermogis documentation](https://pythermogis-15909e.ci.tno.nl/) and the
 > [ThermoGIS disclaimer](https://www.thermogis.nl/en/disclaimer) before use.
 
+## License
+
+The original dashboard source code and documentation in this repository are
+open-source software licensed under the [MIT License](LICENSE). You may use,
+study, modify, merge, publish, distribute, sublicense, and sell copies of the
+covered dashboard code, subject to the copyright and license notice requirements
+in that license. Contributions accepted into this repository are licensed under
+the same terms; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+The MIT License does not relicense separately distributed dependencies or
+third-party materials. In particular, Pythermogis, the ThermoGIS Java backend,
+third-party packages, names, logos, and externally sourced data retain their own
+copyright, license, and disclaimer terms.
+
 ## Repository layout
 
 ```text
@@ -195,3 +209,5 @@ well design, cost estimation, permitting, or investment due diligence.
 - [User guide](docs/USER_GUIDE.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Dependency architecture](docs/DEPENDENCIES.md)
+- [License](LICENSE)
+- [Contributing](CONTRIBUTING.md)
