@@ -1,0 +1,40 @@
+name: Windows desktop package
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install desktop build dependencies
+        run: uv sync --locked --extra desktop
+
+      - name: Build portable desktop package
+        run: uv run --locked --extra desktop python build_windows.py --zip
+
+      - name: Upload portable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: PythermogisDashboard-windows
+          path: dist/PythermogisDashboard-windows.zip
+
+      - name: Attach package to tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/PythermogisDashboard-windows.zip
