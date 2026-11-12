@@ -55,9 +55,9 @@ inside `.venv`. The environment is machine-generated and never committed.
 
 ## Install and run
 
-### Windows desktop download (no terminal or UV required)
+### Windows desktop download (simple installation)
 
-For non-technical users, download the latest
+For a simple installation, download the latest
 [portable Windows desktop package](https://github.com/floriansmit/pythermogis-dashboard/releases/latest/download/PythermogisDashboard-windows.zip)
 from the [GitHub Releases page](https://github.com/floriansmit/pythermogis-dashboard/releases),
 extract it, and double-click `PythermogisDashboard\\PythermogisDashboard.exe`.
