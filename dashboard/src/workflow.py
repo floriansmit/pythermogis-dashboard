@@ -16,7 +16,8 @@ import pandas as pd
 import xarray as xr
 
 
-ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(os.environ.get("PYTHERMOGIS_DATA_ROOT", _DEFAULT_ROOT)).expanduser().resolve()
 DATA_ROOT = ROOT / "data"
 INPUT_SUBFOLDERS = {
     "2d_best_fit": "input_data/2d_grid_best_fit",

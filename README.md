@@ -34,6 +34,9 @@ copyright, license, and disclaimer terms.
 pythermogis-dashboard/
 ├─ install_dashboard.py
 ├─ run_dashboard.py
+├─ desktop_launcher.py
+├─ build_windows.py
+├─ pythermogis-dashboard.spec
 ├─ pyproject.toml
 ├─ uv.lock
 ├─ dashboard/
@@ -51,6 +54,29 @@ UV installs the released `pythermogis`, `pygridsio`, and `pygridsio3d` packages
 inside `.venv`. The environment is machine-generated and never committed.
 
 ## Install and run
+
+### Windows desktop download (no terminal or UV required)
+
+For non-technical users, download the latest
+[portable Windows desktop package](https://github.com/floriansmit/pythermogis-dashboard/releases/latest/download/PythermogisDashboard-windows.zip),
+extract it, and double-click `PythermogisDashboard\\PythermogisDashboard.exe`.
+The executable starts the local Streamlit server and opens the dashboard in an
+embedded browser window. Project files and simulation results are stored in the
+user's local application-data folder, so the extracted package can be replaced
+without losing projects.
+
+Windows 10/11 normally includes the Microsoft Edge WebView2 runtime. If it is
+missing, install the [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)
+once and start the executable again.
+
+Maintainers can build the same portable package with:
+
+```powershell
+uv sync --locked --extra desktop
+uv run --locked --extra desktop python build_windows.py --zip
+```
+
+The resulting ZIP is written to `dist/PythermogisDashboard-windows.zip`.
 
 ### 1. Install UV once
 
