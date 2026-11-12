@@ -58,7 +58,8 @@ inside `.venv`. The environment is machine-generated and never committed.
 ### Windows desktop download (no terminal or UV required)
 
 For non-technical users, download the latest
-[portable Windows desktop package](https://github.com/floriansmit/pythermogis-dashboard/releases/latest/download/PythermogisDashboard-windows.zip),
+[portable Windows desktop package](https://github.com/floriansmit/pythermogis-dashboard/releases/latest/download/PythermogisDashboard-windows.zip)
+from the [GitHub Releases page](https://github.com/floriansmit/pythermogis-dashboard/releases),
 extract it, and double-click `PythermogisDashboard\\PythermogisDashboard.exe`.
 The executable starts the local Streamlit server and opens the dashboard in an
 embedded browser window. Project files and simulation results are stored in the
